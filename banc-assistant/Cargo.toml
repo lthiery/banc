@@ -1,6 +1,6 @@
 [package]
 name = "banc-assistant"
-description = "Reference assistant firmware for the banc HIL test framework (RP2350 + embassy). Placeholder release; firmware lives in the banc repository."
+description = "Reference assistant firmware for the banc HIL test framework (RP2350 + embassy)."
 version = "0.0.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -12,3 +12,46 @@ categories = ["development-tools::testing", "embedded"]
 # Detached from the root workspace: firmware builds for
 # thumbv8m.main-none-eabihf with its own profile and lockfile.
 [workspace]
+
+[dependencies]
+banc-icd = { path = "../banc-icd", version = "0.0.1" }
+
+# Version lockstep: postcard-rpc 0.12's `embassy-usb-0_5-server` feature pins
+# embassy-usb 0.5 / embassy-usb-driver 0.2 / embassy-sync 0.7 /
+# embassy-executor 0.9 / embassy-time 0.5. embassy-rp 0.9.0 is the release
+# built against exactly that set (0.10 moved to executor 0.10 / sync 0.8).
+postcard-rpc = { version = "0.12.1", features = ["embassy-usb-0_5-server", "defmt"] }
+postcard-schema = { version = "0.2", features = ["derive", "heapless-v0_8"] }
+
+embassy-rp = { version = "0.9.0", features = [
+    "rp235xa",
+    "defmt",
+    "time-driver",
+    "critical-section-impl",
+    "binary-info",
+] }
+embassy-executor = { version = "0.9", features = [
+    "arch-cortex-m",
+    "executor-thread",
+    "defmt",
+] }
+embassy-time = { version = "0.5", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-sync = { version = "0.7", features = ["defmt"] }
+embassy-usb = { version = "0.5", features = ["defmt"] }
+embassy-futures = "0.1"
+
+cortex-m = { version = "0.7.7", features = ["inline-asm"] }
+cortex-m-rt = "0.7"
+static_cell = "2.1"
+heapless = { version = "0.8", default-features = false }
+
+defmt = "1"
+defmt-rtt = "1"
+panic-probe = { version = "1", features = ["print-defmt"] }
+
+[profile.release]
+debug = 2
+lto = true
+opt-level = "z"
+codegen-units = 1
+incremental = false
