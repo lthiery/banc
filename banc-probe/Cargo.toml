@@ -1,0 +1,16 @@
+[package]
+name = "banc-probe"
+description = "Target lifecycle for the banc HIL test framework: flash, reset, and RTT capture via probe-rs, local or remote"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+probe-rs = "0.32"
+tokio = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }

@@ -1,0 +1,14 @@
+[package]
+name = "banc-assistant"
+description = "Reference assistant firmware for the banc HIL test framework (RP2350 + embassy). Placeholder release; firmware lives in the banc repository."
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["Louis Thiery <thiery.louis@gmail.com>"]
+repository = "https://github.com/lthiery/banc"
+keywords = ["hil", "testing", "embedded", "hardware"]
+categories = ["development-tools::testing", "embedded"]
+
+# Detached from the root workspace: firmware builds for
+# thumbv8m.main-none-eabihf with its own profile and lockfile.
+[workspace]

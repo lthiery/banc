@@ -1,0 +1,16 @@
+[package]
+name = "banc-icd"
+description = "Wire types and endpoint definitions (ICD) for the banc HIL test framework: node management and the reference assistant"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+postcard-rpc = { workspace = true }
+postcard-schema = { workspace = true }
+serde = { version = "1", default-features = false, features = ["derive"] }
+heapless = { version = "0.8", default-features = false, features = ["serde"] }
