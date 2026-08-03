@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "banc-host"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "banc-icd",

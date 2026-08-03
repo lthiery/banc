@@ -4,6 +4,14 @@
 //! Suites are `harness = false` test binaries whose `main` calls [`run`].
 //! Works under plain `cargo test` and under cargo-nextest (which runs each
 //! test in its own process — hence the file lock in [`crate::rig`]).
+//!
+//! Each trial runs on its own tokio runtime, dropped when the trial ends:
+//! every task the test (or its fixtures' libraries) spawned is torn down
+//! before the next trial starts, so leaked tasks cannot hold sockets or
+//! other resources across tests. Consequence for [`Rig`]: it is created on
+//! the first trial's runtime and shared across all trials, so it must only
+//! hold runtime-independent resources (config, file lock) — connections
+//! belong to the per-test fixtures.
 
 use crate::evidence::Evidence;
 use crate::rig::{Acquire, Rig};
@@ -45,21 +53,18 @@ pub fn run(tests: Vec<BancTest>) -> ExitCode {
     // Hardware is exclusive; never run trials concurrently in-process.
     args.test_threads = Some(1);
 
-    let rt = Arc::new(
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("building tokio runtime"),
-    );
     let rig_state: Arc<OnceLock<RigState>> = Arc::new(OnceLock::new());
 
     let trials: Vec<Trial> = tests
         .into_iter()
         .map(|test| {
-            let rt = rt.clone();
             let rig_state = rig_state.clone();
             let name = test.name.clone();
             Trial::ignorable_test(test.name, move || {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("building tokio runtime");
                 let state = rig_state.get_or_init(|| match rt.block_on(Rig::acquire()) {
                     Ok(rig) => RigState::Ready(Arc::new(rig)),
                     Err(Acquire::Skip(reason)) => RigState::Skip(reason),
