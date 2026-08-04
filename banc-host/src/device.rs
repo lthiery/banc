@@ -73,6 +73,17 @@ impl DeviceTest {
             "device test '{}' started twice",
             self.test_path
         );
+        // A missing crate dir would otherwise surface as a silent no-show:
+        // the child dies unspawned, the device transmits nothing, and the
+        // scenario times out on its first expect with no hint why (seen
+        // 2026-08-04, CI dispatched on a ref without the fw crate).
+        if !self.suite.crate_dir.is_dir() {
+            self.state = State::Done(Err(format!(
+                "device crate dir {} does not exist",
+                self.suite.crate_dir.display()
+            )));
+            return;
+        }
         let mut cmd = tokio::process::Command::new(&self.suite.program);
         cmd.arg("test")
             .args(&self.suite.cargo_args)
@@ -83,6 +94,25 @@ impl DeviceTest {
             .kill_on_drop(true);
         self.state =
             State::Running(tokio::spawn(async move { cmd.status().await.map_err(|e| e.to_string()) }));
+    }
+
+    /// If the device side has already failed (spawn error, missing crate
+    /// dir, early exit), return its error without waiting. Context for
+    /// host-side failures: a scenario that times out because the device
+    /// never ran should say so, not just "deadline elapsed".
+    pub async fn failure_context(&mut self) -> Option<String> {
+        let finished = match &self.state {
+            State::Done(r) => r.is_err(),
+            State::Running(handle) => handle.is_finished(),
+            State::Idle => false,
+        };
+        if !finished {
+            return None;
+        }
+        self.verdict()
+            .await
+            .err()
+            .map(|f| f.message().unwrap_or("device test failed").to_string())
     }
 
     /// The device-side result (semihosting exit code via the runner).
@@ -160,7 +190,17 @@ macro_rules! paired_suite {
                                         __suite.test($crate::paired_suite!(@device_test $name $($dt)?));
                                     let __body: ::std::result::Result<(), $crate::Failed> =
                                         async { $body Ok(()) }.await;
-                                    __body?;
+                                    if let ::std::result::Result::Err(e) = __body {
+                                        let msg = e.message().unwrap_or("test failed").to_string();
+                                        return ::std::result::Result::Err(
+                                            match $dev.failure_context().await {
+                                                ::std::option::Option::Some(dev_err) => $crate::Failed::from(
+                                                    ::std::format!("{msg}\ndevice side: {dev_err}"),
+                                                ),
+                                                ::std::option::Option::None => $crate::Failed::from(msg),
+                                            },
+                                        );
+                                    }
                                     $dev.verdict().await
                                 })
                             },
@@ -194,6 +234,36 @@ mod tests {
         bad.start();
         assert!(bad.verdict().await.is_err());
         assert!(bad.verdict().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn missing_crate_dir_fails_at_start_with_context() {
+        let mut suite = DeviceSuite::new("/nonexistent/fw-crate", "join");
+        suite.program = "true".into();
+        let mut dt = suite.test("tests::x");
+        dt.start();
+        // Available immediately as context, before any verdict await.
+        let ctx = dt.failure_context().await.unwrap();
+        assert!(ctx.contains("does not exist"), "unexpected context: {ctx}");
+        assert!(dt.verdict().await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_failure_context_while_device_still_running() {
+        use std::os::unix::fs::PermissionsExt;
+        let script = std::env::temp_dir().join(format!("banc-slow-{}", std::process::id()));
+        std::fs::write(&script, "#!/bin/sh\nsleep 5\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut suite = DeviceSuite::new(std::env::temp_dir(), "join");
+        suite.program = script.to_str().unwrap().into();
+        let mut dt = suite.test("tests::x");
+        dt.start();
+        assert!(dt.failure_context().await.is_none());
+        // Not consumed: the handle is still awaitable afterwards.
+        assert!(matches!(dt.state, State::Running(_)));
+        std::fs::remove_file(script).ok();
     }
 
     #[tokio::test]
