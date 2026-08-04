@@ -21,6 +21,7 @@
 //! `cargo test` stays green off-rig and honest on-rig.
 
 pub mod config;
+pub mod device;
 pub mod evidence;
 pub mod expect;
 pub mod node;
@@ -28,6 +29,7 @@ pub mod rig;
 pub mod runner;
 
 pub use config::RigConfig;
+pub use device::{DeviceSuite, DeviceTest};
 pub use evidence::Evidence;
 pub use libtest_mimic::Failed;
 pub use node::Node;

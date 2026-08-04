@@ -23,3 +23,7 @@ fs4 = { version = "0.13", features = ["sync"] }
 [[test]]
 name = "smoke"
 harness = false
+
+[[test]]
+name = "paired"
+harness = false
