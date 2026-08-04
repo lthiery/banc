@@ -1,7 +1,7 @@
 [package]
 name = "banc"
 description = "banc d'essai: a host-evaluated hardware-in-the-loop test framework for embedded Rust. The bench is never the thing being tested."
-version.workspace = true
+version = "0.0.2"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -103,6 +103,13 @@ banc-host owns re-enumeration and reconnection.
   on one thread. Cross-process (nextest runs one process per test; CI pollers
   and humans coexist), an advisory file lock is held for the life of the
   `Rig` fixture.
+- **One tokio runtime per trial.** The runtime is dropped when the trial
+  ends, so every task a test (or its fixture libraries) spawned is torn down
+  before the next trial — leaked tasks cannot hold sockets or hardware
+  across tests. Learned live: a shared runtime let a fixture library's
+  internal tasks keep a UDP port bound into the next scenario. Consequence:
+  the shared `Rig` holds only runtime-independent resources (config, file
+  lock); connections belong to per-test fixtures.
 
 ## Prior art
 
