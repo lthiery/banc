@@ -11,6 +11,12 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+// Acquisition is deliberately synchronous: the `Rig` outlives every
+// per-trial runtime, so nothing created here may be tied to one. Keeping
+// async out of this path means a runtime-bound resource (socket, client,
+// spawned task) cannot be added to `Rig` without changing this signature —
+// connections belong to per-test fixtures, created on the trial's runtime.
+
 /// How long a process waits for another test process to release the rig
 /// before giving up. Override with BANC_LOCK_TIMEOUT_SECS.
 const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -42,7 +48,7 @@ impl Rig {
     /// Missing config => `Acquire::Skip` (honest self-skip). Malformed
     /// config or lock timeout => `Acquire::Fail` (a rig machine that cannot
     /// run its suite is a failure, not a skip).
-    pub async fn acquire() -> Result<Rig, Acquire> {
+    pub fn acquire() -> Result<Rig, Acquire> {
         let Some(path) = RigConfig::locate()? else {
             return Err(Acquire::Skip(format!(
                 "no rig: {} not found (set {} or create one to run on hardware)",
@@ -64,7 +70,7 @@ impl Rig {
             .and_then(|s| s.parse().ok())
             .map(Duration::from_secs)
             .unwrap_or(DEFAULT_LOCK_TIMEOUT);
-        let lock = RigLock::take(lock_path, timeout).await?;
+        let lock = RigLock::take(lock_path, timeout)?;
 
         Ok(Rig { config, base_dir, _lock: lock })
     }
@@ -87,7 +93,7 @@ struct RigLock {
 }
 
 impl RigLock {
-    async fn take(path: PathBuf, timeout: Duration) -> anyhow::Result<Self> {
+    fn take(path: PathBuf, timeout: Duration) -> anyhow::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -104,7 +110,7 @@ impl RigLock {
                     path.display()
                 );
             }
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            std::thread::sleep(Duration::from_millis(200));
         }
     }
 }
@@ -112,5 +118,22 @@ impl RigLock {
 impl Drop for RigLock {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.file);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_excludes_second_taker_until_dropped() {
+        let path = std::env::temp_dir()
+            .join(format!("banc-rig-lock-test-{}", std::process::id()));
+        let held = RigLock::take(path.clone(), Duration::ZERO).unwrap();
+        let contended = RigLock::take(path.clone(), Duration::ZERO);
+        assert!(contended.is_err(), "second take must fail while lock is held");
+        drop(held);
+        RigLock::take(path.clone(), Duration::ZERO).unwrap();
+        std::fs::remove_file(path).ok();
     }
 }

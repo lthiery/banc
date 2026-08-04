@@ -8,10 +8,10 @@
 //! Each trial runs on its own tokio runtime, dropped when the trial ends:
 //! every task the test (or its fixtures' libraries) spawned is torn down
 //! before the next trial starts, so leaked tasks cannot hold sockets or
-//! other resources across tests. Consequence for [`Rig`]: it is created on
-//! the first trial's runtime and shared across all trials, so it must only
-//! hold runtime-independent resources (config, file lock) — connections
-//! belong to the per-test fixtures.
+//! other resources across tests. The [`Rig`] outlives all of them: it is
+//! acquired synchronously (no runtime in scope) and holds only
+//! runtime-independent resources — connections belong to the per-test
+//! fixtures.
 
 use crate::evidence::Evidence;
 use crate::rig::{Acquire, Rig};
@@ -61,11 +61,7 @@ pub fn run(tests: Vec<BancTest>) -> ExitCode {
             let rig_state = rig_state.clone();
             let name = test.name.clone();
             Trial::ignorable_test(test.name, move || {
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .expect("building tokio runtime");
-                let state = rig_state.get_or_init(|| match rt.block_on(Rig::acquire()) {
+                let state = rig_state.get_or_init(|| match Rig::acquire() {
                     Ok(rig) => RigState::Ready(Arc::new(rig)),
                     Err(Acquire::Skip(reason)) => RigState::Skip(reason),
                     Err(Acquire::Fail(e)) => RigState::Fail(format!("{e:#}")),
@@ -75,6 +71,10 @@ pub fn run(tests: Vec<BancTest>) -> ExitCode {
                     RigState::Skip(reason) => return Ok(Completion::ignored_with(reason.clone())),
                     RigState::Fail(e) => return Err(Failed::from(format!("rig unavailable: {e}"))),
                 };
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("building tokio runtime");
                 let evidence = Evidence::new(&name);
                 let cx = TestCx { rig: rig.clone(), evidence: evidence.clone() };
                 let result = rt.block_on((test.f)(cx));
