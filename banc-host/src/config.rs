@@ -30,6 +30,21 @@ pub struct RigMeta {
     /// runs one process per test). Default: target/banc.lock next to the
     /// config file.
     pub lock_file: Option<PathBuf>,
+    /// Network lease server on the rig daemon. When set, it replaces the
+    /// flock entirely: runners on other machines contend for the same rig,
+    /// so a local file cannot be the arbiter.
+    pub lease: Option<LeaseConfig>,
+}
+
+/// Where and how to take the network rig lease.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeaseConfig {
+    /// host:port of the rig daemon.
+    pub addr: String,
+    /// File holding the shared token; relative paths resolve from the
+    /// rig-config directory.
+    pub token_file: PathBuf,
 }
 
 /// The device under test, driven via probe-rs.
@@ -45,7 +60,8 @@ pub struct TargetConfig {
     pub probe_host: Option<String>,
 }
 
-/// An assistant node speaking banc-icd over postcard-rpc USB.
+/// An assistant node speaking banc-icd over postcard-rpc, reached over USB
+/// (serial/product match) or the network (addr + token).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssistantConfig {
@@ -55,6 +71,12 @@ pub struct AssistantConfig {
     pub serial: Option<String>,
     /// USB product string to match when serial is not given.
     pub product: Option<String>,
+    /// host:port of a network node (a rig daemon). Mutually exclusive with
+    /// the USB fields.
+    pub addr: Option<String>,
+    /// Token file for the network handshake; relative paths resolve from
+    /// the rig-config directory.
+    pub token_file: Option<PathBuf>,
 }
 
 /// A bench instrument. Drivers are matched on `kind` by the suite.

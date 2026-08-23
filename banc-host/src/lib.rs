@@ -24,6 +24,7 @@ pub mod config;
 pub mod device;
 pub mod evidence;
 pub mod expect;
+pub mod net;
 pub mod node;
 pub mod rig;
 pub mod runner;

@@ -1,7 +1,7 @@
 [package]
 name = "banc-host"
 description = "Host-side fixtures and test runner for the banc HIL test framework: rig topology, hardware serialization, self-skip, evidence"
-version = "0.0.3"
+version = "0.0.4"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -12,7 +12,8 @@ categories.workspace = true
 [dependencies]
 banc-icd = { workspace = true }
 postcard-rpc = { workspace = true, features = ["use-std", "raw-nusb"] }
-tokio = { workspace = true }
+postcard = { version = "1", features = ["use-std"] }
+tokio = { workspace = true, features = ["net"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 libtest-mimic = "0.8.2"

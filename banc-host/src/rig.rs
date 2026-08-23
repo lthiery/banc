@@ -39,7 +39,16 @@ pub struct Rig {
     pub config: RigConfig,
     /// Directory the config file lives in; relative paths resolve from here.
     pub base_dir: PathBuf,
-    _lock: RigLock,
+    _lock: Exclusive,
+}
+
+/// How this process's exclusive hold on the rig is enforced: an flock for
+/// single-machine rigs, a network lease when the rig config names a lease
+/// server (runners on other machines cannot see our lock file).
+enum Exclusive {
+    // Both variants exist only for their Drop (release on Rig teardown).
+    Flock(#[allow(dead_code)] RigLock),
+    Lease(#[allow(dead_code)] crate::net::lease::LeaseClient),
 }
 
 impl Rig {
@@ -59,18 +68,31 @@ impl Rig {
         let config = RigConfig::load(&path)?;
         let base_dir = path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
 
-        let lock_path = config
-            .rig
-            .lock_file
-            .clone()
-            .map(|p| if p.is_absolute() { p } else { base_dir.join(p) })
-            .unwrap_or_else(|| base_dir.join("target").join("banc.lock"));
         let timeout = std::env::var("BANC_LOCK_TIMEOUT_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
             .map(Duration::from_secs)
             .unwrap_or(DEFAULT_LOCK_TIMEOUT);
-        let lock = RigLock::take(lock_path, timeout)?;
+
+        let lock = if let Some(lease) = &config.rig.lease {
+            let token = read_token(&lease.token_file, &base_dir)?;
+            let holder = std::env::var("BANC_LEASE_HOLDER").unwrap_or_else(|_| {
+                let host = std::env::var("HOSTNAME").unwrap_or_else(|_| "?".into());
+                format!("{host}:{}", std::process::id())
+            });
+            Exclusive::Lease(
+                crate::net::lease::LeaseClient::acquire(&lease.addr, &token, &holder, timeout)
+                    .map_err(|e| anyhow::anyhow!("acquiring rig lease: {e}"))?,
+            )
+        } else {
+            let lock_path = config
+                .rig
+                .lock_file
+                .clone()
+                .map(|p| if p.is_absolute() { p } else { base_dir.join(p) })
+                .unwrap_or_else(|| base_dir.join("target").join("banc.lock"));
+            Exclusive::Flock(RigLock::take(lock_path, timeout)?)
+        };
 
         Ok(Rig { config, base_dir, _lock: lock })
     }
@@ -81,8 +103,20 @@ impl Rig {
             .config
             .assistant(name)
             .ok_or_else(|| anyhow::anyhow!("no assistant '{name}' in rig config"))?;
-        Node::connect(cfg).await
+        let token = cfg
+            .token_file
+            .as_ref()
+            .map(|p| read_token(p, &self.base_dir))
+            .transpose()?;
+        Node::connect(cfg, token.as_deref()).await
     }
+}
+
+fn read_token(path: &std::path::Path, base_dir: &std::path::Path) -> anyhow::Result<String> {
+    let path = if path.is_absolute() { path.to_path_buf() } else { base_dir.join(path) };
+    let token = std::fs::read_to_string(&path)
+        .map_err(|e| anyhow::anyhow!("reading token file {}: {e}", path.display()))?;
+    Ok(token.trim().to_owned())
 }
 
 /// Advisory file lock serializing rig access across processes. Held for the

@@ -1,9 +1,10 @@
-//! A banc node: any board speaking banc-icd over postcard-rpc USB.
+//! A banc node: anything speaking banc-icd over postcard-rpc, whether a
+//! board on USB or a rig daemon across the network.
 //!
-//! `Node` wraps discovery (nusb enumeration filtered by the rig config),
-//! the identify handshake, and access to the underlying `HostClient`.
-//! Consumers with their own ICDs call `client()` and use their endpoint
-//! types directly — banc never needs to know them.
+//! `Node` wraps discovery (nusb enumeration filtered by the rig config, or
+//! an authenticated TCP connect), the identify handshake, and access to the
+//! underlying `HostClient`. Consumers with their own ICDs call `client()`
+//! and use their endpoint types directly — banc never needs to know them.
 
 use crate::config::AssistantConfig;
 use banc_icd::node::Identity;
@@ -18,8 +19,17 @@ pub struct Node {
 }
 
 impl Node {
-    /// Enumerate USB, match this config entry, connect, and identify.
-    pub async fn connect(cfg: &AssistantConfig) -> anyhow::Result<Node> {
+    /// Connect per the config entry: network when `addr` is set, USB
+    /// enumeration otherwise. `token` must be pre-resolved by the caller
+    /// (the rig knows the config's base directory; this module does not).
+    pub async fn connect(cfg: &AssistantConfig, token: Option<&str>) -> anyhow::Result<Node> {
+        if let Some(addr) = &cfg.addr {
+            let token = token.ok_or_else(|| {
+                anyhow::anyhow!("node '{}' has addr but no token was resolved", cfg.name)
+            })?;
+            let client = crate::net::connect_node(addr, token).await?;
+            return Self::identify(client, &cfg.name).await;
+        }
         let serial = cfg.serial.clone();
         let product = cfg.product.clone();
         let name = cfg.name.clone();
@@ -38,15 +48,17 @@ impl Node {
             VarSeqKind::Seq2,
         )
         .map_err(|e| anyhow::anyhow!("connecting to node '{name}': {e}"))?;
+        Self::identify(client, &cfg.name).await
+    }
 
+    async fn identify(client: HostClient<WireError>, name: &str) -> anyhow::Result<Node> {
         let identity = client
             .send_resp::<IdentifyEndpoint>(&())
             .await
-            .map_err(|e| anyhow::anyhow!("identify on node '{}': {e:?}", cfg.name))?;
+            .map_err(|e| anyhow::anyhow!("identify on node '{name}': {e:?}"))?;
         anyhow::ensure!(
             identity.protocol_version == PROTOCOL_VERSION,
-            "node '{}' speaks banc protocol v{}, host expects v{PROTOCOL_VERSION}",
-            cfg.name,
+            "node '{name}' speaks banc protocol v{}, host expects v{PROTOCOL_VERSION}",
             identity.protocol_version,
         );
         Ok(Node { client, identity })
