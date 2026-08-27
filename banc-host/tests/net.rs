@@ -2,8 +2,10 @@
 //! rig daemon: token handshake, postcard-rpc identify over TCP, and the
 //! lease protocol including contention.
 
+use banc_host::config::AssistantConfig;
 use banc_host::net::lease::{LeaseClient, LeaseServer};
 use banc_host::net::{self, Role};
+use banc_host::Node;
 use banc_icd::node::{Identity, NodeRole};
 use banc_icd::{IdentifyEndpoint, PROTOCOL_VERSION};
 use postcard_rpc::header::{VarHeader, VarKey};
@@ -79,7 +81,8 @@ async fn serve_identify(stream: &mut tokio::net::TcpStream) -> anyhow::Result<()
 #[tokio::test(flavor = "multi_thread")]
 async fn identify_over_tcp() {
     let addr = spawn_daemon().await;
-    let client = net::connect_node(&addr.to_string(), TOKEN).await.unwrap();
+    let (client, rig_name) = net::connect_node(&addr.to_string(), TOKEN).await.unwrap();
+    assert_eq!(rig_name, "test-rig", "handshake must surface the daemon's rig name");
     let identity = client.send_resp::<IdentifyEndpoint>(&()).await.unwrap();
     assert_eq!(identity.protocol_version, PROTOCOL_VERSION);
     assert_eq!(identity.unique_id, 42);
@@ -90,6 +93,56 @@ async fn bad_token_is_denied() {
     let addr = spawn_daemon().await;
     let err = net::connect_node(&addr.to_string(), "wrong").await;
     assert!(err.is_err());
+}
+
+/// Config for a network node at `addr`, optionally pinned to a unique id.
+fn net_cfg(addr: &std::net::SocketAddr, unique_id: Option<&str>) -> AssistantConfig {
+    AssistantConfig {
+        name: "a0".into(),
+        serial: None,
+        product: None,
+        addr: Some(addr.to_string()),
+        token_file: None,
+        unique_id: unique_id.map(str::to_owned),
+    }
+}
+
+fn expect_err(r: anyhow::Result<Node>) -> anyhow::Error {
+    match r {
+        Ok(_) => panic!("expected connect to fail"),
+        Err(e) => e,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn connect_rejects_wrong_rig_name() {
+    let addr = spawn_daemon().await;
+    // Daemon reports rig "test-rig"; we expect a different bench.
+    let err = expect_err(Node::connect(&net_cfg(&addr, None), Some(TOKEN), Some("other-rig")).await);
+    assert!(err.to_string().contains("belongs to rig 'test-rig'"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn connect_rejects_wrong_unique_id() {
+    let addr = spawn_daemon().await;
+    // Daemon reports unique_id 42 = 0x2A; pin to a different device.
+    let err =
+        expect_err(Node::connect(&net_cfg(&addr, Some("00000000DEADBEEF")), Some(TOKEN), None).await);
+    assert!(err.to_string().contains("unique id"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn connect_accepts_matching_identity() {
+    let addr = spawn_daemon().await;
+    // Correct rig name and the daemon's actual id (42 = 0x2A), any case.
+    let node =
+        match Node::connect(&net_cfg(&addr, Some("000000000000002a")), Some(TOKEN), Some("test-rig"))
+            .await
+        {
+            Ok(n) => n,
+            Err(e) => panic!("matching identity should connect: {e}"),
+        };
+    assert_eq!(node.identity.unique_id, 42);
 }
 
 #[tokio::test(flavor = "multi_thread")]

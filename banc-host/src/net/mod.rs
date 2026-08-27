@@ -115,26 +115,30 @@ async fn handshake_client(stream: &mut TcpStream, role: Role, token: &str) -> an
     }
 }
 
-/// Connect to a remote banc node and return the postcard-rpc client, exactly
-/// as `Node::connect` does over USB. Must run on a tokio runtime (the wire
-/// workers are spawned onto it).
-pub async fn connect_node(addr: &str, token: &str) -> anyhow::Result<HostClient<WireError>> {
+/// Connect to a remote banc node and return the postcard-rpc client plus the
+/// rig name the daemon reported, exactly as `Node::connect` does over USB.
+/// Must run on a tokio runtime (the wire workers are spawned onto it).
+pub async fn connect_node(
+    addr: &str,
+    token: &str,
+) -> anyhow::Result<(HostClient<WireError>, String)> {
     let mut stream = TcpStream::connect(addr)
         .await
         .map_err(|e| anyhow::anyhow!("connecting to node at {addr}: {e}"))?;
     stream.set_nodelay(true)?;
-    handshake_client(&mut stream, Role::Node, token)
+    let rig_name = handshake_client(&mut stream, Role::Node, token)
         .await
         .map_err(|e| anyhow::anyhow!("node handshake with {addr}: {e}"))?;
     let (rx, tx) = stream.into_split();
-    Ok(HostClient::new_with_wire(
+    let client = HostClient::new_with_wire(
         TcpWireTx(tx),
         TcpWireRx(rx),
         TokioSpawn,
         VarSeqKind::Seq2,
         ERROR_PATH,
         8,
-    ))
+    );
+    Ok((client, rig_name))
 }
 
 struct TcpWireTx(tokio::net::tcp::OwnedWriteHalf);

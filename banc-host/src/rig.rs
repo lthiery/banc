@@ -108,7 +108,7 @@ impl Rig {
             .as_ref()
             .map(|p| read_token(p, &self.base_dir))
             .transpose()?;
-        Node::connect(cfg, token.as_deref()).await
+        Node::connect(cfg, token.as_deref(), self.config.rig.name.as_deref()).await
     }
 }
 
@@ -116,7 +116,11 @@ fn read_token(path: &std::path::Path, base_dir: &std::path::Path) -> anyhow::Res
     let path = if path.is_absolute() { path.to_path_buf() } else { base_dir.join(path) };
     let token = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("reading token file {}: {e}", path.display()))?;
-    Ok(token.trim().to_owned())
+    let token = token.trim().to_owned();
+    // An empty token authenticates nothing; fail loudly rather than handshake
+    // with a blank secret.
+    anyhow::ensure!(!token.is_empty(), "token file {} is empty", path.display());
+    Ok(token)
 }
 
 /// Advisory file lock serializing rig access across processes. Held for the
