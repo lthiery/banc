@@ -109,9 +109,15 @@ impl Drop for LeaseClient {
 }
 
 /// Renew every ttl/3 until the stop channel closes, then release. A broken
-/// connection is reconnected and the lease re-acquired; losing the lease to
-/// another holder mid-run is loudly reported but cannot fail the suite from
-/// here (the daemon side is what refuses the usurped session's traffic).
+/// connection is reconnected and the lease re-acquired.
+///
+/// Losing the lease to another holder mid-run is currently only reported
+/// here, not enforced: node connections are separate authenticated sessions
+/// that carry no lease id, so the daemon cannot refuse traffic from a
+/// displaced holder, and two runners can both believe they hold the rig after
+/// a partition or long pause. Binding hardware sessions to the active lease
+/// (so exclusivity is provable, not advisory) is tracked as follow-up; until
+/// then this is fail-open and the eprintln is the only signal.
 fn renew_loop(
     mut stream: TcpStream,
     mut id: u64,
