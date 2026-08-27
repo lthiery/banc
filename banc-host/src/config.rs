@@ -77,6 +77,20 @@ pub struct AssistantConfig {
     /// Token file for the network handshake; relative paths resolve from
     /// the rig-config directory.
     pub token_file: Option<PathBuf>,
+    /// Expected device unique id as a 16-hex-digit string (the same value the
+    /// assistant reports in `Identity` and surfaces as its USB serial). When
+    /// set, a connected node whose id differs is rejected: this is how a
+    /// network node gets the identity check that USB gets for free via
+    /// `serial`. Case-insensitive.
+    pub unique_id: Option<String>,
+}
+
+impl AssistantConfig {
+    /// True when this entry describes a network node (addr set) rather than a
+    /// USB one.
+    pub fn is_network(&self) -> bool {
+        self.addr.is_some()
+    }
 }
 
 /// A bench instrument. Drivers are matched on `kind` by the suite.
@@ -123,7 +137,85 @@ impl RigConfig {
         let text = std::fs::read_to_string(path)?;
         let config: RigConfig = toml::from_str(&text)
             .map_err(|e| anyhow::anyhow!("parsing {}: {e}", path.display()))?;
+        config
+            .validate()
+            .map_err(|e| anyhow::anyhow!("invalid rig config {}: {e}", path.display()))?;
         Ok(config)
+    }
+
+    /// Reject configs that parse but describe nothing runnable, so a typo
+    /// fails at load with a clear message instead of a confusing runtime
+    /// error (or, worse, silently matching the wrong device).
+    pub fn validate(&self) -> anyhow::Result<()> {
+        // Names are how tests look nodes up; duplicates make `assistant(name)`
+        // and `instrument(name)` ambiguous (first-wins is a silent footgun).
+        let mut seen = std::collections::HashSet::new();
+        for a in &self.assistants {
+            anyhow::ensure!(!a.name.trim().is_empty(), "assistant with an empty name");
+            anyhow::ensure!(
+                seen.insert(("assistant", a.name.as_str())),
+                "duplicate assistant name '{}'",
+                a.name
+            );
+        }
+        seen.clear();
+        for i in &self.instruments {
+            anyhow::ensure!(!i.name.trim().is_empty(), "instrument with an empty name");
+            anyhow::ensure!(
+                seen.insert(("instrument", i.name.as_str())),
+                "duplicate instrument name '{}'",
+                i.name
+            );
+        }
+
+        for a in &self.assistants {
+            if a.is_network() {
+                // Network node: USB match fields are meaningless and a token is
+                // mandatory (the handshake cannot proceed without it).
+                anyhow::ensure!(
+                    a.serial.is_none() && a.product.is_none(),
+                    "assistant '{}' sets addr and USB serial/product; pick one transport",
+                    a.name
+                );
+                anyhow::ensure!(
+                    a.token_file.is_some(),
+                    "network assistant '{}' has addr but no token_file",
+                    a.name
+                );
+                anyhow::ensure!(
+                    !a.addr.as_deref().unwrap_or("").trim().is_empty(),
+                    "assistant '{}' has an empty addr",
+                    a.name
+                );
+            } else {
+                // USB node: at least one of serial/product must constrain the
+                // match, otherwise the predicate matches ANY attached device.
+                anyhow::ensure!(
+                    a.serial.is_some() || a.product.is_some(),
+                    "USB assistant '{}' has neither serial nor product; \
+                     that matches any attached device",
+                    a.name
+                );
+                anyhow::ensure!(
+                    a.token_file.is_none(),
+                    "USB assistant '{}' has a token_file but no addr to use it with",
+                    a.name
+                );
+            }
+            if let Some(id) = &a.unique_id {
+                anyhow::ensure!(
+                    id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit()),
+                    "assistant '{}' unique_id '{}' must be 16 hex digits",
+                    a.name,
+                    id
+                );
+            }
+        }
+
+        if let Some(lease) = &self.rig.lease {
+            anyhow::ensure!(!lease.addr.trim().is_empty(), "rig lease has an empty addr");
+        }
+        Ok(())
     }
 
     pub fn assistant(&self, name: &str) -> Option<&AssistantConfig> {
@@ -174,5 +266,64 @@ mod tests {
         let cfg: RigConfig = toml::from_str("").unwrap();
         assert!(cfg.target.is_none());
         assert!(cfg.assistants.is_empty());
+        cfg.validate().unwrap();
+    }
+
+    fn parse(s: &str) -> RigConfig {
+        toml::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn usb_assistant_without_serial_or_product_is_rejected() {
+        let err = parse("[[assistant]]\nname = \"a0\"\n").validate().unwrap_err();
+        assert!(err.to_string().contains("any attached device"), "{err}");
+    }
+
+    #[test]
+    fn network_and_usb_fields_conflict() {
+        let err = parse(
+            "[[assistant]]\nname = \"a0\"\naddr = \"rig:9000\"\n\
+             token_file = \"t\"\nserial = \"ABC\"\n",
+        )
+        .validate()
+        .unwrap_err();
+        assert!(err.to_string().contains("pick one transport"), "{err}");
+    }
+
+    #[test]
+    fn network_assistant_needs_a_token() {
+        let err = parse("[[assistant]]\nname = \"a0\"\naddr = \"rig:9000\"\n")
+            .validate()
+            .unwrap_err();
+        assert!(err.to_string().contains("no token_file"), "{err}");
+    }
+
+    #[test]
+    fn duplicate_names_are_rejected() {
+        let err = parse(
+            "[[assistant]]\nname = \"a0\"\nserial = \"A\"\n\
+             [[assistant]]\nname = \"a0\"\nserial = \"B\"\n",
+        )
+        .validate()
+        .unwrap_err();
+        assert!(err.to_string().contains("duplicate assistant name"), "{err}");
+    }
+
+    #[test]
+    fn bad_unique_id_is_rejected() {
+        let err = parse("[[assistant]]\nname = \"a0\"\naddr = \"rig:9000\"\ntoken_file = \"t\"\nunique_id = \"xyz\"\n")
+            .validate()
+            .unwrap_err();
+        assert!(err.to_string().contains("16 hex digits"), "{err}");
+    }
+
+    #[test]
+    fn well_formed_network_assistant_validates() {
+        parse(
+            "[[assistant]]\nname = \"a0\"\naddr = \"rig:9000\"\n\
+             token_file = \"t\"\nunique_id = \"0123456789ABCDEF\"\n",
+        )
+        .validate()
+        .unwrap();
     }
 }
