@@ -53,7 +53,7 @@ pub struct LeaseConfig {
 pub struct TargetConfig {
     /// probe-rs target-database chip name, e.g. "STM32WL55JCIx".
     pub chip: String,
-    /// Probe selector "VID:PID[:SERIAL]". None: the only probe attached.
+    /// Probe selector `VID:PID[:SERIAL]`. None: the only probe attached.
     pub probe: Option<String>,
     /// probe-rs remote server (`probe-rs serve`), e.g. "https://pi:3000".
     /// None: local USB probe via the probe-rs library.

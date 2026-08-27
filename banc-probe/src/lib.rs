@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 pub struct TargetSpec {
     /// probe-rs target-database name, e.g. "STM32WL55JCIx", "RP2350".
     pub chip: String,
-    /// "VID:PID[:SERIAL]"; None = the only probe attached.
+    /// `VID:PID[:SERIAL]`; None = the only probe attached.
     pub probe: Option<String>,
     /// `probe-rs serve` URL; None = local USB probe via the library.
     pub probe_host: Option<String>,

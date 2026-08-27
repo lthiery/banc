@@ -40,7 +40,7 @@ const JOIN_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The `id` in `Renew`/`Release` is the capability granted by `Acquire`: the
 /// server authorizes those operations solely by matching it against the
-/// current holder. It is minted from the OS RNG (see [`mint_lease_id`]) so a
+/// current holder. It is minted from the OS RNG (see `mint_lease_id`) so a
 /// different token holder cannot guess it and release or renew a lease that is
 /// not theirs. (The bearer token gates *reaching* the server; the lease id
 /// gates *acting on a specific lease*.)
