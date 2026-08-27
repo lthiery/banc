@@ -13,6 +13,13 @@ categories = ["development-tools::testing", "embedded"]
 # thumbv8m.main-none-eabihf with its own profile and lockfile.
 [workspace]
 
+# This is a no_std binary: it has no libtest harness, so `--all-targets`
+# (which would build it as a test) must not try. Makes the boundary explicit.
+[[bin]]
+name = "banc-assistant"
+test = false
+bench = false
+
 [dependencies]
 banc-icd = { path = "../banc-icd", version = "0.0.1" }
 
