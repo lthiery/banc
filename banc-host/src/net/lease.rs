@@ -13,7 +13,7 @@
 
 use super::{handshake_client_sync, read_frame_sync, write_frame_sync, Role};
 use serde::{Deserialize, Serialize};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -21,6 +21,29 @@ use std::time::{Duration, Instant};
 /// renewals (GC pause, WAN hiccup) do not lose the rig.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(60);
 
+/// Bound on a single TCP connect to the lease server. Without this a wedged
+/// or black-holed daemon would block acquisition (and renewal reconnects)
+/// indefinitely, past any acquire deadline.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Bound on every blocking read/write once connected, so no lease roundtrip
+/// (handshake, acquire, renew, release) can hang forever on a half-dead peer.
+/// A timeout on the renew path just triggers a reconnect; the lease itself is
+/// protected by its TTL.
+pub const IO_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Upper bound on how long `LeaseClient::drop` waits for the renew thread to
+/// exit before detaching it. The renew thread's own I/O is bounded by
+/// [`IO_TIMEOUT`], so this only ever trips if the thread is wedged somewhere
+/// unexpected; detaching keeps suite teardown from hanging.
+const JOIN_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The `id` in `Renew`/`Release` is the capability granted by `Acquire`: the
+/// server authorizes those operations solely by matching it against the
+/// current holder. It is minted from the OS RNG (see [`mint_lease_id`]) so a
+/// different token holder cannot guess it and release or renew a lease that is
+/// not theirs. (The bearer token gates *reaching* the server; the lease id
+/// gates *acting on a specific lease*.)
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum LeaseRequest {
     Acquire { holder: String, ttl_s: u32 },
@@ -45,11 +68,34 @@ fn roundtrip(stream: &mut TcpStream, req: &LeaseRequest) -> anyhow::Result<Lease
 }
 
 fn connect(addr: &str, token: &str) -> anyhow::Result<TcpStream> {
-    let mut stream = TcpStream::connect(addr)
-        .map_err(|e| anyhow::anyhow!("connecting to lease server at {addr}: {e}"))?;
+    let mut stream = connect_timeout(addr)?;
     stream.set_nodelay(true)?;
+    // Bound every subsequent blocking read/write, including the handshake
+    // below, so a peer that accepts the connection but then stalls cannot
+    // wedge us forever.
+    stream.set_read_timeout(Some(IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(IO_TIMEOUT))?;
     handshake_client_sync(&mut stream, Role::Lease, token)?;
     Ok(stream)
+}
+
+/// Connect with a bounded timeout. `connect_timeout` needs a resolved
+/// `SocketAddr`, so resolve `host:port` and try each address in turn.
+fn connect_timeout(addr: &str) -> anyhow::Result<TcpStream> {
+    let addrs = addr
+        .to_socket_addrs()
+        .map_err(|e| anyhow::anyhow!("resolving lease server address {addr}: {e}"))?;
+    let mut last_err = None;
+    for sa in addrs {
+        match TcpStream::connect_timeout(&sa, CONNECT_TIMEOUT) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    match last_err {
+        Some(e) => Err(anyhow::anyhow!("connecting to lease server at {addr}: {e}")),
+        None => Err(anyhow::anyhow!("lease server address {addr} resolved to no addresses")),
+    }
 }
 
 /// A held rig lease. Renewed in the background; released on drop.
@@ -101,8 +147,23 @@ impl LeaseClient {
 
 impl Drop for LeaseClient {
     fn drop(&mut self) {
+        // Signal the renew thread to release and exit.
         drop(self.stop.take());
         if let Some(t) = self.thread.take() {
+            // Bounded join: the thread's I/O is already timeout-bounded, so it
+            // should exit promptly. If it somehow does not, detach rather than
+            // hang suite teardown forever.
+            let deadline = Instant::now() + JOIN_TIMEOUT;
+            while !t.is_finished() {
+                if Instant::now() >= deadline {
+                    eprintln!(
+                        "banc: lease renew thread did not exit within {JOIN_TIMEOUT:?}; \
+                         detaching (rig lease will free itself after its TTL)"
+                    );
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
             let _ = t.join();
         }
     }
@@ -184,12 +245,20 @@ fn reacquire(
 
 // --- server side ---
 
+/// A minted lease id doubles as an unguessable capability: Renew and Release
+/// are authorized by presenting it, so it must not be predictable by another
+/// token holder. Drawn from the OS RNG rather than a counter.
+fn mint_lease_id() -> u64 {
+    let mut buf = [0u8; 8];
+    getrandom::fill(&mut buf).expect("OS RNG unavailable");
+    u64::from_le_bytes(buf)
+}
+
 /// Single-slot lease state for a rig daemon. Expiry is evaluated lazily on
 /// each request; a holder that stops renewing is displaced by the next
 /// Acquire after its TTL passes.
 pub struct LeaseServer {
     state: std::sync::Mutex<Option<Held>>,
-    next_id: std::sync::atomic::AtomicU64,
 }
 
 struct Held {
@@ -209,7 +278,6 @@ impl LeaseServer {
     pub fn new() -> Self {
         LeaseServer {
             state: std::sync::Mutex::new(None),
-            next_id: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
@@ -235,7 +303,7 @@ impl LeaseServer {
                     expires_in_s: held.expires_at.saturating_duration_since(now).as_secs() as u32,
                 },
                 None => {
-                    let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let id = mint_lease_id();
                     let ttl = Duration::from_secs(ttl_s.clamp(5, 3600) as u64);
                     *state = Some(Held { id, holder, expires_at: now + ttl, ttl });
                     LeaseReply::Granted { id }
@@ -296,6 +364,46 @@ mod tests {
             srv.handle(LeaseRequest::Acquire { holder: "b".into(), ttl_s: 60 }),
             LeaseReply::Granted { .. }
         ));
+    }
+
+    #[test]
+    fn wrong_id_cannot_release_or_renew_anothers_lease() {
+        let srv = LeaseServer::new();
+        let LeaseReply::Granted { id } =
+            srv.handle(LeaseRequest::Acquire { holder: "a".into(), ttl_s: 60 })
+        else {
+            panic!("first acquire must be granted");
+        };
+        // A holder who did not acquire this lease cannot guess an id that
+        // releases or renews it.
+        let forged = id.wrapping_add(1);
+        srv.handle(LeaseRequest::Release { id: forged });
+        assert!(matches!(srv.handle(LeaseRequest::Renew { id: forged }), LeaseReply::Gone));
+        // The real holder is untouched and still exclusive.
+        assert_eq!(srv.holder().as_deref(), Some("a"));
+        assert!(matches!(
+            srv.handle(LeaseRequest::Acquire { holder: "b".into(), ttl_s: 60 }),
+            LeaseReply::Busy { .. }
+        ));
+        // The genuine capability still works.
+        assert!(matches!(srv.handle(LeaseRequest::Renew { id }), LeaseReply::Ok));
+    }
+
+    #[test]
+    fn minted_ids_are_not_a_predictable_sequence() {
+        let srv = LeaseServer::new();
+        let mut ids = Vec::new();
+        for _ in 0..8 {
+            let LeaseReply::Granted { id } =
+                srv.handle(LeaseRequest::Acquire { holder: "a".into(), ttl_s: 60 })
+            else {
+                panic!("acquire must be granted");
+            };
+            ids.push(id);
+            srv.handle(LeaseRequest::Release { id });
+        }
+        // A counter would hand out 1,2,3,...; capability ids must not.
+        assert!(ids.windows(2).any(|w| w[1] != w[0].wrapping_add(1)));
     }
 
     #[test]

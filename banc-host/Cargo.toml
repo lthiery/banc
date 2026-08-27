@@ -20,6 +20,7 @@ libtest-mimic = "0.8.2"
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
 fs4 = { version = "0.13", features = ["sync"] }
+getrandom = "0.3"
 
 [[test]]
 name = "smoke"
