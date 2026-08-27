@@ -7,7 +7,11 @@
 //! - [`assistant`]: the v0 surface of the reference assistant — GPIO, pin-edge
 //!   monitoring, UART, SPI/I2C controller transactions, and timestamped edge
 //!   capture. All timing data carries assistant-local timestamps; the host
-//!   never asserts timing from its own wall clock.
+//!   never asserts timing from its own wall clock. Note the two edge paths
+//!   differ in rigor: live [`PinEdgeTopic`] monitoring is
+//!   best-effort (task-wake timestamps, edges may coalesce), while buffered
+//!   [`assistant::CaptureChunk`] is the hardware-backed, overflow-reporting
+//!   path for timing assertions.
 //!
 //! Consumers building combined firmware (their own endpoints + banc's) must
 //! list banc's endpoints in their single `endpoints!`/`define_dispatch!`
@@ -128,8 +132,16 @@ pub mod assistant {
     }
 
     /// One observed edge, timestamped by the assistant's own clock
-    /// (microseconds since assistant boot). This is the ground truth all
-    /// host-side timing assertions run against.
+    /// (microseconds since assistant boot).
+    ///
+    /// Best-effort. When carried by [`crate::PinEdgeTopic`] the timestamp is taken
+    /// after the monitor task wakes, so it includes scheduler and interrupt
+    /// latency, and edges arriving faster than the task runs can coalesce or
+    /// be missed. Good for functional GPIO observation ("did the line
+    /// toggle"), not for rigorous timing. Hardware-backed timing lives in the
+    /// buffered capture path ([`CaptureChunk`]), where events are stamped in
+    /// the capture engine and overflow is reported rather than silently
+    /// dropped.
     #[derive(Serialize, Deserialize, Schema, Debug, Clone, Copy, PartialEq, Eq)]
     pub struct PinEvent {
         pub pin: u8,
@@ -140,7 +152,8 @@ pub mod assistant {
     #[derive(Serialize, Deserialize, Schema, Debug, Clone, Copy, PartialEq, Eq)]
     pub struct PinMonitor {
         pub pin: u8,
-        /// true: publish PinEdgeTopic on every edge; false: stop.
+        /// true: publish a best-effort [`crate::PinEdgeTopic`] per observed edge
+        /// (edges may coalesce under load, see [`PinEvent`]); false: stop.
         pub enable: bool,
     }
 

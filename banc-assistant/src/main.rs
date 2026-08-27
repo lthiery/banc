@@ -6,8 +6,9 @@
 //! - node management: identify (real), reset (real, delayed `sys_reset`);
 //! - GPIO config/set/read over a fixed table of GPIO 2..=9 mapped to banc
 //!   pins 0..=7;
-//! - pin-edge monitoring publishing [`PinEdgeTopic`] with assistant-local
-//!   microsecond timestamps.
+//! - best-effort pin-edge monitoring publishing [`PinEdgeTopic`] with
+//!   assistant-local microsecond timestamps (see the handler for why this is
+//!   functional-only, not a timing reference).
 //!
 //! Honest stubs (`Err(Error::Unsupported)`, wired in Phase 2): UART, SPI,
 //! I2C, edge capture.
@@ -321,8 +322,16 @@ async fn gpio_read_handler(
 // --- pin-edge monitoring ---
 
 /// Owns the pin for the duration of the monitor (GPIO endpoints answer
-/// `Busy` meanwhile), publishes [`PinEdgeTopic`] on every edge with the
+/// `Busy` meanwhile), publishes [`PinEdgeTopic`] per observed edge with the
 /// assistant-local microsecond timestamp taken right after wake-up.
+///
+/// Best-effort by construction: `wait_for_any_edge` wakes the task, which
+/// then reads the level and stamps the time, so the timestamp carries
+/// scheduler and interrupt latency and edges arriving faster than the task
+/// runs collapse into one (or are missed). This is fine for functional GPIO
+/// observation but is not a timing reference; rigorous timing belongs to the
+/// buffered capture path (Phase 2), which stamps in hardware and reports
+/// overflow.
 ///
 /// Pool sizing: up to `NUM_PINS` long-running monitors plus headroom for
 /// short-lived disable/out-of-range requests hitting the same endpoint.
