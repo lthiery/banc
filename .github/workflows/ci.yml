@@ -54,6 +54,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2
+      # Run cargo-audit directly rather than rustsec/audit-check: the action
+      # posts results via the check-run API, which needs a writable token this
+      # repo does not grant by default. `cargo audit` fails on vulnerabilities
+      # but not on unmaintained-dep warnings, which is what we want here.
+      - uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit
+      - name: cargo audit
+        run: cargo audit
