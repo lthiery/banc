@@ -17,6 +17,10 @@ use std::time::Duration;
 
 type LineSink = Box<dyn Fn(String) + Send>;
 
+/// Cap on an unterminated RTT line. Past this, `pending` is flushed as one
+/// oversized line so a newline-less device cannot grow host memory unbounded.
+const MAX_LINE: usize = 64 * 1024;
+
 enum Cmd {
     Flash(std::path::PathBuf, tokio::sync::oneshot::Sender<anyhow::Result<()>>),
     Reset(tokio::sync::oneshot::Sender<anyhow::Result<()>>),
@@ -222,6 +226,14 @@ fn poll_rtt(session: &mut Session, state: &mut RttState) -> anyhow::Result<()> {
     // Emit complete lines; keep the trailing partial for the next poll.
     while let Some(pos) = state.pending.iter().position(|&b| b == b'\n') {
         let line: Vec<u8> = state.pending.drain(..=pos).collect();
+        let text = String::from_utf8_lossy(&line);
+        (state.sink)(text.trim_end().to_owned());
+    }
+    // A target that emits without newlines must not grow `pending` without
+    // bound: flush an oversized partial as its own line so host memory stays
+    // capped regardless of DUT behaviour.
+    if state.pending.len() > MAX_LINE {
+        let line = std::mem::take(&mut state.pending);
         let text = String::from_utf8_lossy(&line);
         (state.sink)(text.trim_end().to_owned());
     }
