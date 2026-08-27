@@ -1,6 +1,9 @@
 //! Event-stream assertion helpers: wait for a matching event within a
-//! deadline, or assert silence over a window. The negative form succeeds via
-//! the timeout path — "nothing observed" is a verdict, not an error.
+//! deadline, or assert silence over a window. The negative form succeeds only
+//! via the timeout path: silence is a verdict, but loss of observation is not.
+//! A source that closes mid-window (dropped subscription, dead forwarding
+//! task, crashed assistant) yields [`ExpectError::Closed`], never a pass — we
+//! cannot certify quiet on a channel we stopped watching.
 
 use std::future::Future;
 use std::time::Duration;
@@ -56,7 +59,12 @@ pub async fn expect_matching<T, S: EventSource<T>>(
 }
 
 /// Assert that no event matching `pred` arrives within `window`.
-/// The timeout elapsing is the success path.
+///
+/// Only the timeout elapsing is a pass. If the source closes before the window
+/// is up we return [`ExpectError::Closed`]: an assertion of silence is only
+/// meaningful while we are actually observing, and a closed source means we
+/// stopped. Treating that as a pass would let a dead subscription satisfy a
+/// negative hardware assertion, the worst failure mode for test infrastructure.
 pub async fn expect_quiet<T: std::fmt::Debug, S: EventSource<T>>(
     source: &mut S,
     window: Duration,
@@ -67,8 +75,7 @@ pub async fn expect_quiet<T: std::fmt::Debug, S: EventSource<T>>(
             match source.next().await {
                 Some(ev) if pred(&ev) => return Err(ExpectError::Unexpected(format!("{ev:?}"))),
                 Some(_) => continue,
-                // Source closing early counts as quiet: nothing more can match.
-                None => return Ok(()),
+                None => return Err(ExpectError::Closed),
             }
         }
     })
@@ -112,5 +119,14 @@ mod tests {
         tx.send(7).await.unwrap();
         let err = expect_quiet(&mut rx, Duration::from_millis(50), |v| *v == 7).await;
         assert!(matches!(err, Err(ExpectError::Unexpected(_))));
+    }
+
+    #[tokio::test]
+    async fn closed_source_fails_quiet_assertion() {
+        // A dropped sender (dead subscription) must not read as silence.
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<u32>(8);
+        drop(tx);
+        let err = expect_quiet(&mut rx, Duration::from_secs(60), |v| *v == 7).await;
+        assert!(matches!(err, Err(ExpectError::Closed)));
     }
 }
