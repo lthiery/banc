@@ -32,9 +32,9 @@ pub use banc_instrument as instrument;
 pub use banc_probe as probe;
 
 pub mod prelude {
-    pub use banc_host::{run, BancTest, DeviceSuite, DeviceTest, Evidence, Failed, Rig, TestCx};
     pub use banc_host::expect::{expect_matching, expect_quiet};
     pub use banc_host::paired_suite;
+    pub use banc_host::{BancTest, DeviceSuite, DeviceTest, Evidence, Failed, Rig, TestCx, run};
     pub use banc_instrument::for_each_setpoint;
     pub use banc_probe::{Target, TargetSpec};
 }

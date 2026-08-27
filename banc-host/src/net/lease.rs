@@ -11,7 +11,7 @@
 //! runtime-bound resources); renewal runs on a plain thread owned by the
 //! [`LeaseClient`], which releases on drop.
 
-use super::{handshake_client_sync, read_frame_sync, write_frame_sync, Role};
+use super::{Role, handshake_client_sync, read_frame_sync, write_frame_sync};
 use serde::{Deserialize, Serialize};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::mpsc;
@@ -53,9 +53,14 @@ pub enum LeaseRequest {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum LeaseReply {
-    Granted { id: u64 },
+    Granted {
+        id: u64,
+    },
     /// Someone else holds the lease; retry after backoff.
-    Busy { holder: String, expires_in_s: u32 },
+    Busy {
+        holder: String,
+        expires_in_s: u32,
+    },
     /// Renew/Release acknowledged.
     Ok,
     /// The lease id is not current (expired and possibly re-granted).
@@ -94,7 +99,9 @@ fn connect_timeout(addr: &str) -> anyhow::Result<TcpStream> {
     }
     match last_err {
         Some(e) => Err(anyhow::anyhow!("connecting to lease server at {addr}: {e}")),
-        None => Err(anyhow::anyhow!("lease server address {addr} resolved to no addresses")),
+        None => Err(anyhow::anyhow!(
+            "lease server address {addr} resolved to no addresses"
+        )),
     }
 }
 
@@ -122,7 +129,10 @@ impl LeaseClient {
             };
             match roundtrip(&mut stream, &req)? {
                 LeaseReply::Granted { id } => break id,
-                LeaseReply::Busy { holder: other, expires_in_s } => {
+                LeaseReply::Busy {
+                    holder: other,
+                    expires_in_s,
+                } => {
                     if Instant::now() >= deadline {
                         anyhow::bail!(
                             "rig lease held by '{other}' (expires in {expires_in_s}s), \
@@ -141,7 +151,10 @@ impl LeaseClient {
             .name("banc-lease-renew".into())
             .spawn(move || renew_loop(stream, id, ttl, &addr, &token, &holder, stopped))?;
 
-        Ok(LeaseClient { stop: Some(stop), thread: Some(thread) })
+        Ok(LeaseClient {
+            stop: Some(stop),
+            thread: Some(thread),
+        })
     }
 }
 
@@ -233,7 +246,10 @@ fn reacquire(
     ttl: Duration,
 ) -> anyhow::Result<(TcpStream, u64)> {
     let mut stream = connect(addr, token)?;
-    let req = LeaseRequest::Acquire { holder: holder.to_owned(), ttl_s: ttl.as_secs() as u32 };
+    let req = LeaseRequest::Acquire {
+        holder: holder.to_owned(),
+        ttl_s: ttl.as_secs() as u32,
+    };
     match roundtrip(&mut stream, &req)? {
         LeaseReply::Granted { id } => Ok((stream, id)),
         LeaseReply::Busy { holder: other, .. } => {
@@ -305,7 +321,12 @@ impl LeaseServer {
                 None => {
                     let id = mint_lease_id();
                     let ttl = Duration::from_secs(ttl_s.clamp(5, 3600) as u64);
-                    *state = Some(Held { id, holder, expires_at: now + ttl, ttl });
+                    *state = Some(Held {
+                        id,
+                        holder,
+                        expires_at: now + ttl,
+                        ttl,
+                    });
                     LeaseReply::Granted { id }
                 }
             },
@@ -349,19 +370,29 @@ mod tests {
     #[test]
     fn lease_excludes_second_holder_until_released() {
         let srv = LeaseServer::new();
-        let LeaseReply::Granted { id } =
-            srv.handle(LeaseRequest::Acquire { holder: "a".into(), ttl_s: 60 })
-        else {
+        let LeaseReply::Granted { id } = srv.handle(LeaseRequest::Acquire {
+            holder: "a".into(),
+            ttl_s: 60,
+        }) else {
             panic!("first acquire must be granted");
         };
         assert!(matches!(
-            srv.handle(LeaseRequest::Acquire { holder: "b".into(), ttl_s: 60 }),
+            srv.handle(LeaseRequest::Acquire {
+                holder: "b".into(),
+                ttl_s: 60
+            }),
             LeaseReply::Busy { .. }
         ));
-        assert!(matches!(srv.handle(LeaseRequest::Renew { id }), LeaseReply::Ok));
+        assert!(matches!(
+            srv.handle(LeaseRequest::Renew { id }),
+            LeaseReply::Ok
+        ));
         srv.handle(LeaseRequest::Release { id });
         assert!(matches!(
-            srv.handle(LeaseRequest::Acquire { holder: "b".into(), ttl_s: 60 }),
+            srv.handle(LeaseRequest::Acquire {
+                holder: "b".into(),
+                ttl_s: 60
+            }),
             LeaseReply::Granted { .. }
         ));
     }
@@ -369,24 +400,34 @@ mod tests {
     #[test]
     fn wrong_id_cannot_release_or_renew_anothers_lease() {
         let srv = LeaseServer::new();
-        let LeaseReply::Granted { id } =
-            srv.handle(LeaseRequest::Acquire { holder: "a".into(), ttl_s: 60 })
-        else {
+        let LeaseReply::Granted { id } = srv.handle(LeaseRequest::Acquire {
+            holder: "a".into(),
+            ttl_s: 60,
+        }) else {
             panic!("first acquire must be granted");
         };
         // A holder who did not acquire this lease cannot guess an id that
         // releases or renews it.
         let forged = id.wrapping_add(1);
         srv.handle(LeaseRequest::Release { id: forged });
-        assert!(matches!(srv.handle(LeaseRequest::Renew { id: forged }), LeaseReply::Gone));
+        assert!(matches!(
+            srv.handle(LeaseRequest::Renew { id: forged }),
+            LeaseReply::Gone
+        ));
         // The real holder is untouched and still exclusive.
         assert_eq!(srv.holder().as_deref(), Some("a"));
         assert!(matches!(
-            srv.handle(LeaseRequest::Acquire { holder: "b".into(), ttl_s: 60 }),
+            srv.handle(LeaseRequest::Acquire {
+                holder: "b".into(),
+                ttl_s: 60
+            }),
             LeaseReply::Busy { .. }
         ));
         // The genuine capability still works.
-        assert!(matches!(srv.handle(LeaseRequest::Renew { id }), LeaseReply::Ok));
+        assert!(matches!(
+            srv.handle(LeaseRequest::Renew { id }),
+            LeaseReply::Ok
+        ));
     }
 
     #[test]
@@ -394,9 +435,10 @@ mod tests {
         let srv = LeaseServer::new();
         let mut ids = Vec::new();
         for _ in 0..8 {
-            let LeaseReply::Granted { id } =
-                srv.handle(LeaseRequest::Acquire { holder: "a".into(), ttl_s: 60 })
-            else {
+            let LeaseReply::Granted { id } = srv.handle(LeaseRequest::Acquire {
+                holder: "a".into(),
+                ttl_s: 60,
+            }) else {
                 panic!("acquire must be granted");
             };
             ids.push(id);
@@ -409,18 +451,25 @@ mod tests {
     #[test]
     fn expired_lease_is_displaced_and_stale_renew_refused() {
         let srv = LeaseServer::new();
-        let LeaseReply::Granted { id: stale } =
-            srv.handle(LeaseRequest::Acquire { holder: "a".into(), ttl_s: 5 })
-        else {
+        let LeaseReply::Granted { id: stale } = srv.handle(LeaseRequest::Acquire {
+            holder: "a".into(),
+            ttl_s: 5,
+        }) else {
             panic!("first acquire must be granted");
         };
         // Force expiry rather than sleeping: rewind the deadline.
         srv.state.lock().unwrap().as_mut().unwrap().expires_at =
             Instant::now() - Duration::from_secs(1);
         assert!(matches!(
-            srv.handle(LeaseRequest::Acquire { holder: "b".into(), ttl_s: 60 }),
+            srv.handle(LeaseRequest::Acquire {
+                holder: "b".into(),
+                ttl_s: 60
+            }),
             LeaseReply::Granted { .. }
         ));
-        assert!(matches!(srv.handle(LeaseRequest::Renew { id: stale }), LeaseReply::Gone));
+        assert!(matches!(
+            srv.handle(LeaseRequest::Renew { id: stale }),
+            LeaseReply::Gone
+        ));
     }
 }

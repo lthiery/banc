@@ -256,7 +256,10 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.rig.name.as_deref(), Some("bench-1"));
         assert_eq!(cfg.target.as_ref().unwrap().chip, "RP2350");
-        assert_eq!(cfg.assistant("a0").unwrap().serial.as_deref(), Some("0123456789ABCDEF"));
+        assert_eq!(
+            cfg.assistant("a0").unwrap().serial.as_deref(),
+            Some("0123456789ABCDEF")
+        );
         assert_eq!(cfg.instrument("att0").unwrap().kind, "rcdat");
         assert!(cfg.assistant("nope").is_none());
     }
@@ -275,7 +278,9 @@ mod tests {
 
     #[test]
     fn usb_assistant_without_serial_or_product_is_rejected() {
-        let err = parse("[[assistant]]\nname = \"a0\"\n").validate().unwrap_err();
+        let err = parse("[[assistant]]\nname = \"a0\"\n")
+            .validate()
+            .unwrap_err();
         assert!(err.to_string().contains("any attached device"), "{err}");
     }
 
@@ -306,7 +311,10 @@ mod tests {
         )
         .validate()
         .unwrap_err();
-        assert!(err.to_string().contains("duplicate assistant name"), "{err}");
+        assert!(
+            err.to_string().contains("duplicate assistant name"),
+            "{err}"
+        );
     }
 
     #[test]

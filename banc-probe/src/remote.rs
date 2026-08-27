@@ -20,7 +20,10 @@ pub struct RemoteCliTarget {
 impl RemoteCliTarget {
     pub fn new(spec: &TargetSpec, host: &str) -> Self {
         RemoteCliTarget {
-            bin: spec.probe_rs_bin.clone().unwrap_or_else(|| PathBuf::from("probe-rs")),
+            bin: spec
+                .probe_rs_bin
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("probe-rs")),
             host: host.to_owned(),
             chip: spec.chip.clone(),
             probe: spec.probe.clone(),

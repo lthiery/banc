@@ -35,4 +35,4 @@ pub use evidence::Evidence;
 pub use libtest_mimic::Failed;
 pub use node::Node;
 pub use rig::{Acquire, Rig};
-pub use runner::{run, BancTest, TestCx};
+pub use runner::{BancTest, TestCx, run};

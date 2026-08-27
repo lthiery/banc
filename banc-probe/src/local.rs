@@ -6,9 +6,9 @@
 //! between commands.
 
 use crate::{CaptureHealth, RttCapture, TargetSpec};
-use probe_rs::flashing::{download_file, ElfLoader, ElfOptions};
-use probe_rs::probe::list::Lister;
+use probe_rs::flashing::{ElfLoader, ElfOptions, download_file};
 use probe_rs::probe::DebugProbeSelector;
+use probe_rs::probe::list::Lister;
 use probe_rs::rtt::{Rtt, ScanRegion};
 use probe_rs::{Permissions, Session};
 use std::str::FromStr;
@@ -22,7 +22,10 @@ type LineSink = Box<dyn Fn(String) + Send>;
 const MAX_LINE: usize = 64 * 1024;
 
 enum Cmd {
-    Flash(std::path::PathBuf, tokio::sync::oneshot::Sender<anyhow::Result<()>>),
+    Flash(
+        std::path::PathBuf,
+        tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    ),
     Reset(tokio::sync::oneshot::Sender<anyhow::Result<()>>),
     StartRtt {
         sink: LineSink,
@@ -69,10 +72,18 @@ impl LocalTarget {
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let health = CaptureHealth::default();
         self.tx
-            .send(Cmd::StartRtt { sink, stop: stop_rx, health: health.clone(), ready: ready_tx })
+            .send(Cmd::StartRtt {
+                sink,
+                stop: stop_rx,
+                health: health.clone(),
+                ready: ready_tx,
+            })
             .map_err(|_| anyhow::anyhow!("probe worker thread gone"))?;
         ready_rx.await??;
-        Ok(RttCapture { stop: Some(stop_tx), health })
+        Ok(RttCapture {
+            stop: Some(stop_tx),
+            health,
+        })
     }
 }
 
@@ -149,31 +160,35 @@ fn worker(
             match cmd {
                 Cmd::Flash(path, reply) => {
                     rtt = None; // flashing invalidates any RTT attachment
-                    let result = download_file(&mut session, &path, ElfLoader(ElfOptions::default()))
-                        .map_err(|e| anyhow::anyhow!("flashing {}: {e}", path.display()))
-                        .and_then(|_| reset_core(&mut session));
+                    let result =
+                        download_file(&mut session, &path, ElfLoader(ElfOptions::default()))
+                            .map_err(|e| anyhow::anyhow!("flashing {}: {e}", path.display()))
+                            .and_then(|_| reset_core(&mut session));
                     let _ = reply.send(result);
                 }
                 Cmd::Reset(reply) => {
                     let _ = reply.send(reset_core(&mut session));
                 }
-                Cmd::StartRtt { sink, stop, health, ready } => {
-                    match attach_rtt(&mut session) {
-                        Ok(attached) => {
-                            rtt = Some(RttState {
-                                rtt: attached,
-                                sink,
-                                stop,
-                                health,
-                                pending: Vec::new(),
-                            });
-                            let _ = ready.send(Ok(()));
-                        }
-                        Err(e) => {
-                            let _ = ready.send(Err(e));
-                        }
+                Cmd::StartRtt {
+                    sink,
+                    stop,
+                    health,
+                    ready,
+                } => match attach_rtt(&mut session) {
+                    Ok(attached) => {
+                        rtt = Some(RttState {
+                            rtt: attached,
+                            sink,
+                            stop,
+                            health,
+                            pending: Vec::new(),
+                        });
+                        let _ = ready.send(Ok(()));
                     }
-                }
+                    Err(e) => {
+                        let _ = ready.send(Err(e));
+                    }
+                },
             }
         }
 
@@ -198,20 +213,26 @@ fn worker(
 }
 
 fn reset_core(session: &mut Session) -> anyhow::Result<()> {
-    let mut core = session.core(0).map_err(|e| anyhow::anyhow!("core(0): {e}"))?;
+    let mut core = session
+        .core(0)
+        .map_err(|e| anyhow::anyhow!("core(0): {e}"))?;
     core.reset().map_err(|e| anyhow::anyhow!("reset: {e}"))?;
     Ok(())
 }
 
 fn attach_rtt(session: &mut Session) -> anyhow::Result<Rtt> {
-    let mut core = session.core(0).map_err(|e| anyhow::anyhow!("core(0): {e}"))?;
+    let mut core = session
+        .core(0)
+        .map_err(|e| anyhow::anyhow!("core(0): {e}"))?;
     let rtt = Rtt::attach_region(&mut core, &ScanRegion::Ram)
         .map_err(|e| anyhow::anyhow!("attaching RTT: {e}"))?;
     Ok(rtt)
 }
 
 fn poll_rtt(session: &mut Session, state: &mut RttState) -> anyhow::Result<()> {
-    let mut core = session.core(0).map_err(|e| anyhow::anyhow!("core(0): {e}"))?;
+    let mut core = session
+        .core(0)
+        .map_err(|e| anyhow::anyhow!("core(0): {e}"))?;
     let Some(channel) = state.rtt.up_channels().iter_mut().next() else {
         return Ok(());
     };

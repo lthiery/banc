@@ -11,7 +11,7 @@ use banc_icd::node::{Identity, NodeRole};
 use banc_icd::{IdentifyEndpoint, PROTOCOL_VERSION};
 use postcard_rpc::header::VarSeqKind;
 use postcard_rpc::host_client::HostClient;
-use postcard_rpc::standard_icd::{WireError, ERROR_PATH};
+use postcard_rpc::standard_icd::{ERROR_PATH, WireError};
 
 pub struct Node {
     client: HostClient<WireError>,
@@ -67,7 +67,10 @@ impl Node {
         Self::identify(client, cfg).await
     }
 
-    async fn identify(client: HostClient<WireError>, cfg: &AssistantConfig) -> anyhow::Result<Node> {
+    async fn identify(
+        client: HostClient<WireError>,
+        cfg: &AssistantConfig,
+    ) -> anyhow::Result<Node> {
         let name = &cfg.name;
         let identity = client
             .send_resp::<IdentifyEndpoint>(&())

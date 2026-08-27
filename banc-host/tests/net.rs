@@ -2,14 +2,14 @@
 //! rig daemon: token handshake, postcard-rpc identify over TCP, and the
 //! lease protocol including contention.
 
+use banc_host::Node;
 use banc_host::config::AssistantConfig;
 use banc_host::net::lease::{LeaseClient, LeaseServer};
 use banc_host::net::{self, Role};
-use banc_host::Node;
 use banc_icd::node::{Identity, NodeRole};
 use banc_icd::{IdentifyEndpoint, PROTOCOL_VERSION};
-use postcard_rpc::header::{VarHeader, VarKey};
 use postcard_rpc::Endpoint;
+use postcard_rpc::header::{VarHeader, VarKey};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -82,7 +82,10 @@ async fn serve_identify(stream: &mut tokio::net::TcpStream) -> anyhow::Result<()
 async fn identify_over_tcp() {
     let addr = spawn_daemon().await;
     let (client, rig_name) = net::connect_node(&addr.to_string(), TOKEN).await.unwrap();
-    assert_eq!(rig_name, "test-rig", "handshake must surface the daemon's rig name");
+    assert_eq!(
+        rig_name, "test-rig",
+        "handshake must surface the daemon's rig name"
+    );
     let identity = client.send_resp::<IdentifyEndpoint>(&()).await.unwrap();
     assert_eq!(identity.protocol_version, PROTOCOL_VERSION);
     assert_eq!(identity.unique_id, 42);
@@ -118,16 +121,21 @@ fn expect_err(r: anyhow::Result<Node>) -> anyhow::Error {
 async fn connect_rejects_wrong_rig_name() {
     let addr = spawn_daemon().await;
     // Daemon reports rig "test-rig"; we expect a different bench.
-    let err = expect_err(Node::connect(&net_cfg(&addr, None), Some(TOKEN), Some("other-rig")).await);
-    assert!(err.to_string().contains("belongs to rig 'test-rig'"), "{err}");
+    let err =
+        expect_err(Node::connect(&net_cfg(&addr, None), Some(TOKEN), Some("other-rig")).await);
+    assert!(
+        err.to_string().contains("belongs to rig 'test-rig'"),
+        "{err}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn connect_rejects_wrong_unique_id() {
     let addr = spawn_daemon().await;
     // Daemon reports unique_id 42 = 0x2A; pin to a different device.
-    let err =
-        expect_err(Node::connect(&net_cfg(&addr, Some("00000000DEADBEEF")), Some(TOKEN), None).await);
+    let err = expect_err(
+        Node::connect(&net_cfg(&addr, Some("00000000DEADBEEF")), Some(TOKEN), None).await,
+    );
     assert!(err.to_string().contains("unique id"), "{err}");
 }
 
@@ -135,13 +143,16 @@ async fn connect_rejects_wrong_unique_id() {
 async fn connect_accepts_matching_identity() {
     let addr = spawn_daemon().await;
     // Correct rig name and the daemon's actual id (42 = 0x2A), any case.
-    let node =
-        match Node::connect(&net_cfg(&addr, Some("000000000000002a")), Some(TOKEN), Some("test-rig"))
-            .await
-        {
-            Ok(n) => n,
-            Err(e) => panic!("matching identity should connect: {e}"),
-        };
+    let node = match Node::connect(
+        &net_cfg(&addr, Some("000000000000002a")),
+        Some(TOKEN),
+        Some("test-rig"),
+    )
+    .await
+    {
+        Ok(n) => n,
+        Err(e) => panic!("matching identity should connect: {e}"),
+    };
     assert_eq!(node.identity.unique_id, 42);
 }
 
@@ -168,14 +179,23 @@ async fn lease_contention_over_tcp() {
         .await
         .unwrap()
     };
-    assert!(contended.is_err(), "second acquire must fail while first holds the lease");
+    assert!(
+        contended.is_err(),
+        "second acquire must fail while first holds the lease"
+    );
 
     // Dropping the first (release on drop) frees it.
-    tokio::task::spawn_blocking(move || drop(first)).await.unwrap();
+    tokio::task::spawn_blocking(move || drop(first))
+        .await
+        .unwrap();
     let after = tokio::task::spawn_blocking(move || {
         LeaseClient::acquire(&addr_s, TOKEN, "second", Duration::from_secs(5))
     })
     .await
     .unwrap();
-    assert!(after.is_ok(), "acquire after release must succeed: {:?}", after.err());
+    assert!(
+        after.is_ok(),
+        "acquire after release must succeed: {:?}",
+        after.err()
+    );
 }

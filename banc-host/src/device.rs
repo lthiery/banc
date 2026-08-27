@@ -42,7 +42,11 @@ impl DeviceSuite {
     /// A handle for one on-target test, not yet started: the scenario
     /// decides when to flash (typically after its network fixture is up).
     pub fn test(&self, test_path: impl Into<String>) -> DeviceTest {
-        DeviceTest { suite: self.clone(), test_path: test_path.into(), state: State::Idle }
+        DeviceTest {
+            suite: self.clone(),
+            test_path: test_path.into(),
+            state: State::Idle,
+        }
     }
 }
 
@@ -87,13 +91,20 @@ impl DeviceTest {
         let mut cmd = tokio::process::Command::new(&self.suite.program);
         cmd.arg("test")
             .args(&self.suite.cargo_args)
-            .args(["--test", &self.suite.test_target, "--", "--exact", &self.test_path])
+            .args([
+                "--test",
+                &self.suite.test_target,
+                "--",
+                "--exact",
+                &self.test_path,
+            ])
             .current_dir(&self.suite.crate_dir)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
-        self.state =
-            State::Running(tokio::spawn(async move { cmd.status().await.map_err(|e| e.to_string()) }));
+        self.state = State::Running(tokio::spawn(async move {
+            cmd.status().await.map_err(|e| e.to_string())
+        }));
     }
 
     /// If the device side has already failed (spawn error, missing crate
@@ -125,7 +136,7 @@ impl DeviceTest {
                 return Err(Failed::from(format!(
                     "device test '{}' was never started",
                     self.test_path
-                )))
+                )));
             }
             State::Running(handle) => match handle.await {
                 Err(join) => Err(format!("device test task failed: {join}")),
@@ -135,9 +146,10 @@ impl DeviceTest {
                     self.suite.crate_dir.display()
                 )),
                 Ok(Ok(status)) if status.success() => Ok(()),
-                Ok(Ok(status)) => {
-                    Err(format!("device-side test '{}' reported failure ({status})", self.test_path))
-                }
+                Ok(Ok(status)) => Err(format!(
+                    "device-side test '{}' reported failure ({status})",
+                    self.test_path
+                )),
             },
             State::Done(result) => result,
         };

@@ -37,7 +37,10 @@ impl BancTest {
         name: impl Into<String>,
         f: impl FnOnce(TestCx) -> TestFuture + Send + 'static,
     ) -> Self {
-        BancTest { name: name.into(), f: Box::new(f) }
+        BancTest {
+            name: name.into(),
+            f: Box::new(f),
+        }
     }
 }
 
@@ -76,7 +79,10 @@ pub fn run(tests: Vec<BancTest>) -> ExitCode {
                     .build()
                     .expect("building tokio runtime");
                 let evidence = Evidence::new(&name);
-                let cx = TestCx { rig: rig.clone(), evidence: evidence.clone() };
+                let cx = TestCx {
+                    rig: rig.clone(),
+                    evidence: evidence.clone(),
+                };
                 let result = rt.block_on((test.f)(cx));
                 match result {
                     Ok(()) => Ok(Completion::Completed),

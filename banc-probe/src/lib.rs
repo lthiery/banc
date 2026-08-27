@@ -72,9 +72,9 @@ impl Target {
     ) -> anyhow::Result<RttCapture> {
         match self {
             Target::Local(t) => t.start_rtt(Box::new(sink)).await,
-            Target::Remote(_) => anyhow::bail!(
-                "RTT capture over the remote probe-rs CLI is not wired yet (Phase 2)"
-            ),
+            Target::Remote(_) => {
+                anyhow::bail!("RTT capture over the remote probe-rs CLI is not wired yet (Phase 2)")
+            }
         }
     }
 }
@@ -141,6 +141,9 @@ mod tests {
         health.fault("rtt read error: probe gone");
         // Later faults do not overwrite the one that actually ended capture.
         health.fault("secondary");
-        assert_eq!(health.error().as_deref(), Some("rtt read error: probe gone"));
+        assert_eq!(
+            health.error().as_deref(),
+            Some("rtt read error: probe gone")
+        );
     }
 }

@@ -20,7 +20,7 @@ pub mod lease;
 
 use postcard_rpc::header::VarSeqKind;
 use postcard_rpc::host_client::{HostClient, WireRx, WireSpawn, WireTx};
-use postcard_rpc::standard_icd::{WireError, ERROR_PATH};
+use postcard_rpc::standard_icd::{ERROR_PATH, WireError};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -67,7 +67,9 @@ pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<Vec<
     r.read_exact(&mut len).await?;
     let len = u32::from_le_bytes(len) as usize;
     if len > MAX_FRAME {
-        return Err(std::io::Error::other(format!("frame of {len} bytes exceeds MAX_FRAME")));
+        return Err(std::io::Error::other(format!(
+            "frame of {len} bytes exceeds MAX_FRAME"
+        )));
     }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf).await?;
@@ -86,7 +88,9 @@ pub fn read_frame_sync<R: Read>(r: &mut R) -> std::io::Result<Vec<u8>> {
     r.read_exact(&mut len)?;
     let len = u32::from_le_bytes(len) as usize;
     if len > MAX_FRAME {
-        return Err(std::io::Error::other(format!("frame of {len} bytes exceeds MAX_FRAME")));
+        return Err(std::io::Error::other(format!(
+            "frame of {len} bytes exceeds MAX_FRAME"
+        )));
     }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
@@ -105,8 +109,16 @@ fn token_eq(a: &str, b: &str) -> bool {
 
 // --- client side ---
 
-async fn handshake_client(stream: &mut TcpStream, role: Role, token: &str) -> anyhow::Result<String> {
-    let hello = Hello { version: NET_VERSION, role, token: token.to_owned() };
+async fn handshake_client(
+    stream: &mut TcpStream,
+    role: Role,
+    token: &str,
+) -> anyhow::Result<String> {
+    let hello = Hello {
+        version: NET_VERSION,
+        role,
+        token: token.to_owned(),
+    };
     write_frame(stream, &postcard::to_stdvec(&hello)?).await?;
     let reply: HelloReply = postcard::from_bytes(&read_frame(stream).await?)?;
     match reply {
@@ -185,10 +197,16 @@ pub async fn handshake_server(
         anyhow::bail!(
             "handshake denied: version {} (want {NET_VERSION}), token {}",
             hello.version,
-            if token_eq(&hello.token, token) { "ok" } else { "mismatch" },
+            if token_eq(&hello.token, token) {
+                "ok"
+            } else {
+                "mismatch"
+            },
         );
     }
-    let reply = HelloReply::Ok { rig_name: rig_name.to_owned() };
+    let reply = HelloReply::Ok {
+        rig_name: rig_name.to_owned(),
+    };
     write_frame(stream, &postcard::to_stdvec(&reply)?).await?;
     Ok(hello.role)
 }
@@ -199,7 +217,11 @@ pub(crate) fn handshake_client_sync(
     role: Role,
     token: &str,
 ) -> anyhow::Result<()> {
-    let hello = Hello { version: NET_VERSION, role, token: token.to_owned() };
+    let hello = Hello {
+        version: NET_VERSION,
+        role,
+        token: token.to_owned(),
+    };
     write_frame_sync(stream, &postcard::to_stdvec(&hello)?)?;
     let reply: HelloReply = postcard::from_bytes(&read_frame_sync(stream)?)?;
     match reply {

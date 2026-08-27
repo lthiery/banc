@@ -66,7 +66,10 @@ impl Rig {
             )));
         };
         let config = RigConfig::load(&path)?;
-        let base_dir = path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+        let base_dir = path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf();
 
         let timeout = std::env::var("BANC_LOCK_TIMEOUT_SECS")
             .ok()
@@ -94,7 +97,11 @@ impl Rig {
             Exclusive::Flock(RigLock::take(lock_path, timeout)?)
         };
 
-        Ok(Rig { config, base_dir, _lock: lock })
+        Ok(Rig {
+            config,
+            base_dir,
+            _lock: lock,
+        })
     }
 
     /// Connect to a configured assistant by name.
@@ -113,7 +120,11 @@ impl Rig {
 }
 
 fn read_token(path: &std::path::Path, base_dir: &std::path::Path) -> anyhow::Result<String> {
-    let path = if path.is_absolute() { path.to_path_buf() } else { base_dir.join(path) };
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base_dir.join(path)
+    };
     let token = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("reading token file {}: {e}", path.display()))?;
     let token = token.trim().to_owned();
@@ -165,11 +176,13 @@ mod tests {
 
     #[test]
     fn lock_excludes_second_taker_until_dropped() {
-        let path = std::env::temp_dir()
-            .join(format!("banc-rig-lock-test-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("banc-rig-lock-test-{}", std::process::id()));
         let held = RigLock::take(path.clone(), Duration::ZERO).unwrap();
         let contended = RigLock::take(path.clone(), Duration::ZERO);
-        assert!(contended.is_err(), "second take must fail while lock is held");
+        assert!(
+            contended.is_err(),
+            "second take must fail while lock is held"
+        );
         drop(held);
         RigLock::take(path.clone(), Duration::ZERO).unwrap();
         std::fs::remove_file(path).ok();

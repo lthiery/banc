@@ -57,7 +57,11 @@ impl Evidence {
             inner.entries.pop_front();
             inner.dropped += 1;
         }
-        inner.entries.push_back(Entry { at_us, source, line: line.into() });
+        inner.entries.push_back(Entry {
+            at_us,
+            source,
+            line: line.into(),
+        });
     }
 
     pub fn is_empty(&self) -> bool {
@@ -73,7 +77,13 @@ impl Evidence {
             let _ = writeln!(out, "[... {} earlier entries dropped ...]", inner.dropped);
         }
         for e in inner.entries.iter().skip(skip) {
-            let _ = writeln!(out, "[{:>10.3}ms {}] {}", e.at_us as f64 / 1000.0, e.source, e.line);
+            let _ = writeln!(
+                out,
+                "[{:>10.3}ms {}] {}",
+                e.at_us as f64 / 1000.0,
+                e.source,
+                e.line
+            );
         }
         out
     }
@@ -87,10 +97,20 @@ impl Evidence {
         let path = dir.join(format!("{}.evidence.log", sanitize(&inner.test)));
         let mut out = String::new();
         if inner.dropped > 0 {
-            let _ = writeln!(out, "[... {} earlier entries dropped (evidence cap) ...]", inner.dropped);
+            let _ = writeln!(
+                out,
+                "[... {} earlier entries dropped (evidence cap) ...]",
+                inner.dropped
+            );
         }
         for e in &inner.entries {
-            let _ = writeln!(out, "[{:>10.3}ms {}] {}", e.at_us as f64 / 1000.0, e.source, e.line);
+            let _ = writeln!(
+                out,
+                "[{:>10.3}ms {}] {}",
+                e.at_us as f64 / 1000.0,
+                e.source,
+                e.line
+            );
         }
         std::fs::write(&path, out)?;
         Ok(path)
@@ -103,7 +123,13 @@ impl Evidence {
 /// `_`, so an externally-assembled test name cannot traverse directories.
 fn sanitize(test: &str) -> String {
     test.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -140,7 +166,11 @@ mod tests {
             ev.record("test", format!("line {i}"));
         }
         let inner = ev.inner.lock().unwrap();
-        assert_eq!(inner.entries.len(), MAX_ENTRIES, "retained set stays capped");
+        assert_eq!(
+            inner.entries.len(),
+            MAX_ENTRIES,
+            "retained set stays capped"
+        );
         assert_eq!(inner.dropped, 100, "dropped count is exact");
         // Oldest survivor is the 100th line; the first 100 were evicted.
         assert_eq!(inner.entries.front().unwrap().line, "line 100");
@@ -154,7 +184,10 @@ mod tests {
         }
         // A tail covering the whole retained set surfaces the drop notice.
         let tail = ev.tail(MAX_ENTRIES);
-        assert!(tail.contains("5 earlier entries dropped"), "missing drop notice");
+        assert!(
+            tail.contains("5 earlier entries dropped"),
+            "missing drop notice"
+        );
     }
 
     #[test]
