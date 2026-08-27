@@ -17,6 +17,7 @@ pub mod local;
 pub mod remote;
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// Which probe and chip to use; mirrors `banc_host::config::TargetConfig`.
 #[derive(Debug, Clone)]
@@ -78,9 +79,47 @@ impl Target {
     }
 }
 
+/// Shared health of a running capture. A capture starts healthy; the reader
+/// records the first fault that ends it. Cloned between the reader thread and
+/// the [`RttCapture`] handle.
+#[derive(Clone, Default)]
+pub struct CaptureHealth {
+    fault: Arc<Mutex<Option<String>>>,
+}
+
+impl CaptureHealth {
+    /// Record the fault that ended the capture (first one wins).
+    pub(crate) fn fault(&self, msg: impl Into<String>) {
+        let mut slot = self.fault.lock().unwrap();
+        if slot.is_none() {
+            *slot = Some(msg.into());
+        }
+    }
+
+    /// The fault that ended the capture, if it died on its own.
+    pub fn error(&self) -> Option<String> {
+        self.fault.lock().unwrap().clone()
+    }
+}
+
 /// Live RTT capture; dropping it stops the reader.
+///
+/// The capture can also end on its own if the probe read faults. Because a
+/// dead reader looks exactly like a quiet channel to anything downstream,
+/// callers asserting on RTT output should check [`RttCapture::error`] before
+/// trusting silence: a fault there means observation was lost, not that the
+/// device stayed quiet.
 pub struct RttCapture {
     pub(crate) stop: Option<tokio::sync::oneshot::Sender<()>>,
+    pub(crate) health: CaptureHealth,
+}
+
+impl RttCapture {
+    /// The fault that ended the capture early, if any. `None` while the
+    /// capture is healthy or was stopped normally by dropping the handle.
+    pub fn error(&self) -> Option<String> {
+        self.health.error()
+    }
 }
 
 impl Drop for RttCapture {
@@ -88,5 +127,20 @@ impl Drop for RttCapture {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_health_starts_clean_and_latches_first_fault() {
+        let health = CaptureHealth::default();
+        assert!(health.error().is_none(), "a fresh capture is healthy");
+        health.fault("rtt read error: probe gone");
+        // Later faults do not overwrite the one that actually ended capture.
+        health.fault("secondary");
+        assert_eq!(health.error().as_deref(), Some("rtt read error: probe gone"));
     }
 }

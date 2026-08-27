@@ -5,7 +5,7 @@
 //! over a channel and await replies. RTT polling runs on the same thread
 //! between commands.
 
-use crate::{RttCapture, TargetSpec};
+use crate::{CaptureHealth, RttCapture, TargetSpec};
 use probe_rs::flashing::{download_file, ElfLoader, ElfOptions};
 use probe_rs::probe::list::Lister;
 use probe_rs::probe::DebugProbeSelector;
@@ -23,6 +23,7 @@ enum Cmd {
     StartRtt {
         sink: LineSink,
         stop: tokio::sync::oneshot::Receiver<()>,
+        health: CaptureHealth,
         ready: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
     },
 }
@@ -62,11 +63,12 @@ impl LocalTarget {
     pub async fn start_rtt(&mut self, sink: LineSink) -> anyhow::Result<RttCapture> {
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let health = CaptureHealth::default();
         self.tx
-            .send(Cmd::StartRtt { sink, stop: stop_rx, ready: ready_tx })
+            .send(Cmd::StartRtt { sink, stop: stop_rx, health: health.clone(), ready: ready_tx })
             .map_err(|_| anyhow::anyhow!("probe worker thread gone"))?;
         ready_rx.await??;
-        Ok(RttCapture { stop: Some(stop_tx) })
+        Ok(RttCapture { stop: Some(stop_tx), health })
     }
 }
 
@@ -102,6 +104,7 @@ struct RttState {
     rtt: Rtt,
     sink: LineSink,
     stop: tokio::sync::oneshot::Receiver<()>,
+    health: CaptureHealth,
     pending: Vec<u8>,
 }
 
@@ -150,10 +153,16 @@ fn worker(
                 Cmd::Reset(reply) => {
                     let _ = reply.send(reset_core(&mut session));
                 }
-                Cmd::StartRtt { sink, stop, ready } => {
+                Cmd::StartRtt { sink, stop, health, ready } => {
                     match attach_rtt(&mut session) {
                         Ok(attached) => {
-                            rtt = Some(RttState { rtt: attached, sink, stop, pending: Vec::new() });
+                            rtt = Some(RttState {
+                                rtt: attached,
+                                sink,
+                                stop,
+                                health,
+                                pending: Vec::new(),
+                            });
                             let _ = ready.send(Ok(()));
                         }
                         Err(e) => {
@@ -168,7 +177,12 @@ fn worker(
             match state.stop.try_recv() {
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
                     if let Err(e) = poll_rtt(&mut session, state) {
-                        (state.sink)(format!("<rtt read error: {e}>"));
+                        // A read fault ends the capture. Record it where the
+                        // owner can see it (fail-closed) rather than injecting
+                        // it into the line stream as if it were device output:
+                        // consumers must be able to tell lost observation from
+                        // a healthy quiet channel.
+                        state.health.fault(format!("rtt read error: {e}"));
                         rtt = None;
                     }
                 }
