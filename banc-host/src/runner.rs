@@ -14,11 +14,14 @@
 //! fixtures.
 
 use crate::evidence::Evidence;
+use crate::results::{self, Outcome, TestRecord};
 use crate::rig::{Acquire, Rig};
 use libtest_mimic::{Arguments, Completion, Failed, Trial};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::ExitCode;
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 pub struct TestCx {
     pub rig: Arc<Rig>,
@@ -62,19 +65,41 @@ enum RigState {
     Fail(String),
 }
 
+/// Where machine-readable results go: `BANC_ARTIFACTS`, else the rig's
+/// artifacts dir. Off-rig with no override there is nowhere sensible to
+/// write, so skips on rig-less machines leave no file behind.
+fn results_dir(state: &RigState) -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("BANC_ARTIFACTS") {
+        return Some(PathBuf::from(dir));
+    }
+    match state {
+        RigState::Ready(rig) => Some(rig.artifacts_dir()),
+        _ => None,
+    }
+}
+
+fn record_trial(state: &RigState, record: TestRecord) {
+    if let Some(dir) = results_dir(state) {
+        results::append(&dir, &record);
+    }
+}
+
 pub fn run(tests: Vec<BancTest>) -> ExitCode {
     let mut args = Arguments::from_args();
     // Hardware is exclusive; never run trials concurrently in-process.
     args.test_threads = Some(1);
 
     let rig_state: Arc<OnceLock<RigState>> = Arc::new(OnceLock::new());
+    let suite = results::suite_name();
 
     let trials: Vec<Trial> = tests
         .into_iter()
         .map(|test| {
             let rig_state = rig_state.clone();
+            let suite = suite.clone();
             let name = test.name.clone();
             Trial::ignorable_test(test.name, move || {
+                let started = Instant::now();
                 let state = rig_state.get_or_init(|| match Rig::acquire() {
                     Ok(rig) => RigState::Ready(Arc::new(rig)),
                     Err(Acquire::Skip(reason)) => RigState::Skip(reason),
@@ -82,12 +107,24 @@ pub fn run(tests: Vec<BancTest>) -> ExitCode {
                 });
                 let rig = match state {
                     RigState::Ready(rig) => rig.clone(),
-                    RigState::Skip(reason) => return Ok(Completion::ignored_with(reason.clone())),
-                    RigState::Fail(e) => return Err(Failed::from(format!("rig unavailable: {e}"))),
+                    RigState::Skip(reason) => {
+                        let mut rec = TestRecord::new(&suite, &name, Outcome::Skipped);
+                        rec.reason = Some(reason.clone());
+                        record_trial(state, rec);
+                        return Ok(Completion::ignored_with(reason.clone()));
+                    }
+                    RigState::Fail(e) => {
+                        let mut rec = TestRecord::new(&suite, &name, Outcome::Failed);
+                        rec.reason = Some(format!("rig unavailable: {e}"));
+                        record_trial(state, rec);
+                        return Err(Failed::from(format!("rig unavailable: {e}")));
+                    }
                 };
                 let evidence = Evidence::new(&name);
                 let mut result = Ok(());
+                let mut attempts_used = 1;
                 for attempt in 1..=test.attempts {
+                    attempts_used = attempt;
                     if attempt > 1 {
                         evidence.record("runner", format!("--- attempt {attempt} ---"));
                     }
@@ -117,13 +154,21 @@ pub fn run(tests: Vec<BancTest>) -> ExitCode {
                         Err(_) => {}
                     }
                 }
+                let mut record = TestRecord::new(&suite, &name, Outcome::Passed);
+                record.attempts = attempts_used;
+                record.duration_ms = started.elapsed().as_millis() as u64;
                 match result {
-                    Ok(()) => Ok(Completion::Completed),
+                    Ok(()) => {
+                        record_trial(state, record);
+                        Ok(Completion::Completed)
+                    }
                     Err(failed) => {
                         let mut msg = failed
                             .message()
                             .map(|m| m.to_string())
                             .unwrap_or_else(|| "test failed".to_owned());
+                        record.outcome = Outcome::Failed;
+                        record.reason = Some(msg.clone());
                         if !evidence.is_empty() {
                             let dir = rig.artifacts_dir();
                             match evidence.persist(&dir) {
@@ -133,6 +178,7 @@ pub fn run(tests: Vec<BancTest>) -> ExitCode {
                                         evidence.tail(40),
                                         path.display()
                                     ));
+                                    record.evidence = Some(path);
                                 }
                                 Err(e) => {
                                     msg.push_str(&format!(
@@ -142,6 +188,7 @@ pub fn run(tests: Vec<BancTest>) -> ExitCode {
                                 }
                             }
                         }
+                        record_trial(state, record);
                         Err(Failed::from(msg))
                     }
                 }

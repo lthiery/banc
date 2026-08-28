@@ -14,3 +14,4 @@ banc-icd = { workspace = true }
 banc-host = { workspace = true }
 banc-probe = { workspace = true }
 banc-instrument = { workspace = true }
+anyhow = { workspace = true }

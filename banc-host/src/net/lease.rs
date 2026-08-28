@@ -44,11 +44,24 @@ const JOIN_TIMEOUT: Duration = Duration::from_secs(15);
 /// different token holder cannot guess it and release or renew a lease that is
 /// not theirs. (The bearer token gates *reaching* the server; the lease id
 /// gates *acting on a specific lease*.)
+/// Postcard encodes enum variants by index: new variants append only, so a
+/// current client stays intelligible to an older server for the variants it
+/// already knew (an unknown trailing variant fails that one request, not the
+/// protocol).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum LeaseRequest {
-    Acquire { holder: String, ttl_s: u32 },
-    Renew { id: u64 },
-    Release { id: u64 },
+    Acquire {
+        holder: String,
+        ttl_s: u32,
+    },
+    Renew {
+        id: u64,
+    },
+    Release {
+        id: u64,
+    },
+    /// Who holds the lease, without contending for it.
+    Status,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -65,6 +78,11 @@ pub enum LeaseReply {
     Ok,
     /// The lease id is not current (expired and possibly re-granted).
     Gone,
+    /// Answer to `Status`: the current holder, or None when the rig is free.
+    Status {
+        holder: Option<String>,
+        expires_in_s: u32,
+    },
 }
 
 fn roundtrip(stream: &mut TcpStream, req: &LeaseRequest) -> anyhow::Result<LeaseReply> {
@@ -102,6 +120,30 @@ fn connect_timeout(addr: &str) -> anyhow::Result<TcpStream> {
         None => Err(anyhow::anyhow!(
             "lease server address {addr} resolved to no addresses"
         )),
+    }
+}
+
+/// Answer to a one-shot [`query_status`].
+#[derive(Debug, Clone)]
+pub struct LeaseStatus {
+    pub holder: Option<String>,
+    pub expires_in_s: u32,
+}
+
+/// Ask the lease server who holds the rig, without contending for it. An
+/// older server that predates `Status` drops the connection on the unknown
+/// variant; that surfaces here as an error, not a bogus "free".
+pub fn query_status(addr: &str, token: &str) -> anyhow::Result<LeaseStatus> {
+    let mut stream = connect(addr, token)?;
+    match roundtrip(&mut stream, &LeaseRequest::Status)? {
+        LeaseReply::Status {
+            holder,
+            expires_in_s,
+        } => Ok(LeaseStatus {
+            holder,
+            expires_in_s,
+        }),
+        other => anyhow::bail!("unexpected reply to Status: {other:?}"),
     }
 }
 
@@ -343,6 +385,16 @@ impl LeaseServer {
                 }
                 LeaseReply::Ok
             }
+            LeaseRequest::Status => match &*state {
+                Some(held) => LeaseReply::Status {
+                    holder: Some(held.holder.clone()),
+                    expires_in_s: held.expires_at.saturating_duration_since(now).as_secs() as u32,
+                },
+                None => LeaseReply::Status {
+                    holder: None,
+                    expires_in_s: 0,
+                },
+            },
         }
     }
 
@@ -446,6 +498,36 @@ mod tests {
         }
         // A counter would hand out 1,2,3,...; capability ids must not.
         assert!(ids.windows(2).any(|w| w[1] != w[0].wrapping_add(1)));
+    }
+
+    #[test]
+    fn status_reports_holder_without_contending() {
+        let srv = LeaseServer::new();
+        assert!(matches!(
+            srv.handle(LeaseRequest::Status),
+            LeaseReply::Status { holder: None, .. }
+        ));
+        let LeaseReply::Granted { id } = srv.handle(LeaseRequest::Acquire {
+            holder: "a".into(),
+            ttl_s: 60,
+        }) else {
+            panic!("acquire must be granted");
+        };
+        match srv.handle(LeaseRequest::Status) {
+            LeaseReply::Status {
+                holder: Some(h),
+                expires_in_s,
+            } => {
+                assert_eq!(h, "a");
+                assert!(expires_in_s > 0 && expires_in_s <= 60);
+            }
+            other => panic!("expected Status reply, got {other:?}"),
+        }
+        // Status must not have displaced or taken the lease.
+        assert!(matches!(
+            srv.handle(LeaseRequest::Renew { id }),
+            LeaseReply::Ok
+        ));
     }
 
     #[test]

@@ -26,6 +26,7 @@ pub mod evidence;
 pub mod expect;
 pub mod net;
 pub mod node;
+pub mod results;
 pub mod rig;
 pub mod runner;
 
