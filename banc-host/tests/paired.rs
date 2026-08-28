@@ -17,4 +17,9 @@ banc_host::paired_suite! {
         cx.evidence.record("paired", "derived name checked");
         device.start();
     }
+    scenario retried_scenario, attempts: 2, |cx, device| {
+        cx.evidence.record("paired", format!("attempt {}", cx.attempt));
+        device.start();
+        device.verdict().await?;
+    }
 }

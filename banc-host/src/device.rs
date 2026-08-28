@@ -171,6 +171,8 @@ impl DeviceTest {
 ///     }
 ///     // device_test omitted => derived as "tests::<scenario name>"
 ///     scenario rx2_fallback, |cx, device| { ... }
+///     // attempts: N tolerates flaky media (RF): first success passes
+///     scenario join_noisy_band, attempts: 2, |cx, device| { ... }
 /// }
 /// ```
 ///
@@ -185,7 +187,7 @@ macro_rules! paired_suite {
     (
         device_suite: $suite:expr,
         $(
-            scenario $name:ident $(, device_test: $dt:expr)? , |$cx:ident, $dev:ident| $body:block
+            scenario $name:ident $(, attempts: $att:expr)? $(, device_test: $dt:expr)? , |$cx:ident, $dev:ident| $body:block
         )*
     ) => {
         fn main() -> ::std::process::ExitCode {
@@ -197,6 +199,10 @@ macro_rules! paired_suite {
                         $crate::BancTest::new(
                             stringify!($name),
                             move |$cx: $crate::TestCx| {
+                                // Per-call clone: the test closure is `Fn` so
+                                // the runner can re-invoke it on a retry, and
+                                // each attempt gets its own DeviceTest.
+                                let __suite = __suite.clone();
                                 ::std::boxed::Box::pin(async move {
                                     let mut $dev =
                                         __suite.test($crate::paired_suite!(@device_test $name $($dt)?));
@@ -216,7 +222,7 @@ macro_rules! paired_suite {
                                     $dev.verdict().await
                                 })
                             },
-                        )
+                        )$(.attempts($att))?
                     }
                 ),*
             ])

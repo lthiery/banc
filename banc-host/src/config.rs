@@ -58,6 +58,14 @@ pub struct TargetConfig {
     /// probe-rs remote server (`probe-rs serve`), e.g. "https://pi:3000".
     /// None: local USB probe via the probe-rs library.
     pub probe_host: Option<String>,
+    /// Token file for the probe-rs remote server; relative paths resolve
+    /// from the rig-config directory. See [`crate::Rig::target_token`].
+    pub token_file: Option<PathBuf>,
+    /// Suite-specific target settings, passed through untouched (like
+    /// instrument `params`): serial ports, firmware image paths, whatever
+    /// the domain needs to drive this target.
+    #[serde(default)]
+    pub params: toml::Table,
 }
 
 /// An assistant node speaking banc-icd over postcard-rpc, reached over USB

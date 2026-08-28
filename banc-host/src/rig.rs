@@ -104,6 +104,29 @@ impl Rig {
         })
     }
 
+    /// Where test artifacts (evidence logs, captures the suite writes) go:
+    /// `BANC_ARTIFACTS` or `target/banc-artifacts` next to the rig config.
+    /// The runner persists evidence here; suites use it for their own file
+    /// artifacts so everything from a run lands in one place.
+    pub fn artifacts_dir(&self) -> PathBuf {
+        std::env::var_os("BANC_ARTIFACTS")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.base_dir.join("target").join("banc-artifacts"))
+    }
+
+    /// The token for the target's probe-rs remote server, when the rig config
+    /// sets `target.token_file`. `Ok(None)` when no target or no token file.
+    pub fn target_token(&self) -> anyhow::Result<Option<String>> {
+        let Some(target) = &self.config.target else {
+            return Ok(None);
+        };
+        target
+            .token_file
+            .as_ref()
+            .map(|p| read_token(p, &self.base_dir))
+            .transpose()
+    }
+
     /// Connect to a configured assistant by name.
     pub async fn assistant(&self, name: &str) -> anyhow::Result<Node> {
         let cfg: &AssistantConfig = self

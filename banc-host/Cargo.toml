@@ -1,7 +1,7 @@
 [package]
 name = "banc-host"
 description = "Host-side fixtures and test runner for the banc HIL test framework: rig topology, hardware serialization, self-skip, evidence"
-version = "0.0.4"
+version = "0.0.5"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -22,7 +22,7 @@ categories = ["development-tools::testing", "embedded"]
 
 [workspace.dependencies]
 banc-icd = { path = "banc-icd", version = "0.0.1" }
-banc-host = { path = "banc-host", version = "0.0.4" }
+banc-host = { path = "banc-host", version = "0.0.5" }
 banc-probe = { path = "banc-probe", version = "0.0.1" }
 banc-instrument = { path = "banc-instrument", version = "0.0.1" }
 
